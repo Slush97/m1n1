@@ -21,6 +21,7 @@
 #define T8122 0x8122
 #define T8132 0x8132
 #define T8140 0x8140
+#define T8142 0x8142 // M5 "Hidra" (H17G); board J704 / Mac17,2
 #define T6000 0x6000
 #define T6001 0x6001
 #define T6002 0x6002
@@ -31,6 +32,18 @@
 #define T6031 0x6031
 #define T6034 0x6034
 #define T6040 0x6040
+
+// TODO(m5): T8142 (M5 "Hidra") SoC support is incomplete. The SoC ID above was
+// confirmed from hardware (Mac17,2 IORegistry: platform-name "t8142",
+// compatible "J704AP"/"Mac17,2"). The following values still require reading
+// from real silicon (MIDR_EL1 / ADT are EL1/EL2-only, not available from macOS
+// userspace) before T8142 can be built as a TARGET or booted:
+//   - src/midr.h:    MIDR_PART_T8142_HIDRA_{E,P}CORE part IDs (read MIDR_EL1)
+//   - src/chickens.c: per-core init/feature table entries for the above
+//   - src/smp.c:     add `case T8142:` to the start-cpu path
+//   - src/soc.h:     EARLY_UART_BASE for `TARGET == T8142` (UART MMIO base from ADT)
+// Do not commit guessed values for any of the above; they must come from a
+// hardware trace (m1n1 hypervisor on the M5).
 
 #ifdef TARGET
 
