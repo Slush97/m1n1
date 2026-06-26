@@ -38,12 +38,16 @@
 // compatible "J704AP"/"Mac17,2"). The following values still require reading
 // from real silicon (MIDR_EL1 / ADT are EL1/EL2-only, not available from macOS
 // userspace) before T8142 can be built as a TARGET or booted:
-//   - src/midr.h:    MIDR_PART_T8142_HIDRA_{E,P}CORE part IDs (read MIDR_EL1)
+//   - src/midr.h:    MIDR_PART_T8142_HIDRA_{E,P}CORE part IDs (read MIDR_EL1 on HW).
+//                    ADT reports E=apple,sawtooth P=apple,everest, but the exact
+//                    MIDR part field still needs an on-hardware read.
 //   - src/chickens.c: per-core init/feature table entries for the above
 //   - src/smp.c:     add `case T8142:` to the start-cpu path
-//   - src/soc.h:     EARLY_UART_BASE for `TARGET == T8142` (UART MMIO base from ADT)
-// Do not commit guessed values for any of the above; they must come from a
-// hardware trace (m1n1 hypervisor on the M5).
+//   - src/soc.h:     EARLY_UART_BASE for `TARGET == T8142`. DERIVED from this
+//                    machine's ADT as ~0x3A5200000 (uart0 off 0x195200000 +
+//                    arm-io ranges base 0x210000000); UNVERIFIED until m1n1 runs.
+// Values marked DERIVED come from the machine's own ADT (re/M5-FINDINGS.md), not
+// guesses, but nothing here is committed as "supported" until it runs on hardware.
 
 #ifdef TARGET
 
