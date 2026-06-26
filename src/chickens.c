@@ -157,6 +157,11 @@ const struct midr_part_info midr_parts[] = {
     {MIDR_PART_T6040_BRAVA_CHOP_PCORE, "M4 Pro Brava Chop (P core)", NULL, &features_m4},
     {MIDR_PART_T8140_TAHITI_ECORE, "A18 Pro Tahiti (E core)", NULL, &features_m4},
     {MIDR_PART_T8140_TAHITI_PCORE, "A18 Pro Tahiti (P core)", NULL, &features_m4},
+    // M5 Hidra (t8142). Mirrors the M4/A18 pattern: no custom chicken init, and the
+    // conservative features_m4 set until the real M5 feature bits are read on hardware.
+    // Part IDs are placeholders (see midr.h) — TODO(m5): verify on first boot.
+    {MIDR_PART_T8142_HIDRA_ECORE, "M5 Hidra (E core)", NULL, &features_m4},
+    {MIDR_PART_T8142_HIDRA_PCORE, "M5 Hidra (P core)", NULL, &features_m4},
 };
 
 const struct midr_part_features features_unknown = {

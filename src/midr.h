@@ -49,6 +49,12 @@
 #define MIDR_PART_T6040_BRAVA_CHOP_PCORE 0x55
 #define MIDR_PART_T8140_TAHITI_ECORE     0x60
 #define MIDR_PART_T8140_TAHITI_PCORE     0x61
+// M5 "Hidra" (H17G / t8142). Part numbers GUESSED as the next pair after Tahiti
+// (0x60/0x61); NOT yet read from silicon. init_cpu() falls back to "Unknown" on a
+// mismatch, so a wrong guess is harmless and the first boot's "CPU part: 0x__"
+// print reveals the true value to correct these. ADT: E=apple,sawtooth P=apple,everest.
+#define MIDR_PART_T8142_HIDRA_ECORE      0x62 // UNVERIFIED (guess)
+#define MIDR_PART_T8142_HIDRA_PCORE      0x63 // UNVERIFIED (guess)
 
 #define MIDR_REV_LOW  GENMASK(3, 0)
 #define MIDR_PART     GENMASK(15, 4)

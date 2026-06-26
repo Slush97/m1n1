@@ -33,21 +33,21 @@
 #define T6034 0x6034
 #define T6040 0x6040
 
-// TODO(m5): T8142 (M5 "Hidra") SoC support is incomplete. The SoC ID above was
-// confirmed from hardware (Mac17,2 IORegistry: platform-name "t8142",
-// compatible "J704AP"/"Mac17,2"). The following values still require reading
-// from real silicon (MIDR_EL1 / ADT are EL1/EL2-only, not available from macOS
-// userspace) before T8142 can be built as a TARGET or booted:
-//   - src/midr.h:    MIDR_PART_T8142_HIDRA_{E,P}CORE part IDs (read MIDR_EL1 on HW).
-//                    ADT reports E=apple,sawtooth P=apple,everest, but the exact
-//                    MIDR part field still needs an on-hardware read.
-//   - src/chickens.c: per-core init/feature table entries for the above
-//   - src/smp.c:     add `case T8142:` to the start-cpu path
-//   - src/soc.h:     EARLY_UART_BASE for `TARGET == T8142`. DERIVED from this
-//                    machine's ADT as ~0x3A5200000 (uart0 off 0x195200000 +
-//                    arm-io ranges base 0x210000000); UNVERIFIED until m1n1 runs.
-// Values marked DERIVED come from the machine's own ADT (re/M5-FINDINGS.md), not
-// guesses, but nothing here is committed as "supported" until it runs on hardware.
+// T8142 (M5 "Hidra") SoC. ID confirmed from hardware (Mac17,2 IORegistry:
+// platform-name "t8142", compatible "J704AP"/"Mac17,2"). A minimal "first boot"
+// scaffold is now in place so the universal m1n1.macho can identify and start on
+// this SoC; the values below are placeholders/conservative defaults that get
+// CONFIRMED on the first real boot (none of them block bring-up — see notes):
+//   - src/midr.h:     MIDR_PART_T8142_HIDRA_{E,P}CORE — GUESSED 0x62/0x63. init_cpu()
+//                     falls back to "Unknown" on a mismatch (still boots); the first
+//                     boot's "CPU part: 0x__" print reveals the true value.
+//   - src/chickens.c: table entries use NULL init + features_m4 (conservative), exactly
+//                     as the M4 Donan / A18 Tahiti siblings do. TODO(m5): real feature bits.
+//   - src/smp.c:      `case T8142:` added to the T8112-family start-cpu path.
+//   - src/soc.h:      EARLY_UART_BASE below, DERIVED + ADT-confirmed.
+// Values marked DERIVED come from the machine's own ADT (re/M5-FINDINGS.md); GUESSED
+// values are best-effort and self-correcting on first boot. Nothing here is "supported"
+// until it runs on hardware.
 
 #ifdef TARGET
 
@@ -64,6 +64,11 @@
 #define EARLY_UART_BASE 0x3ad200000
 #elif TARGET == T8140
 #define EARLY_UART_BASE 0x385200000
+#elif TARGET == T8142
+// M5 Hidra: DERIVED from this machine's ADT (uart0 off 0x195200000 + arm-io ranges
+// base 0x210000000); ADT-confirmed against the uart-1,samsung node. Only used for
+// a TARGET==T8142 debug build; the universal m1n1.macho reads the UART from the ADT.
+#define EARLY_UART_BASE 0x3a5200000
 #elif TARGET == T6034 || TARGET == T6031
 #define EARLY_UART_BASE 0x391200000
 #elif TARGET == T8015

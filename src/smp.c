@@ -281,6 +281,7 @@ void smp_start_secondaries(void)
         case T8122:
         case T8132:
         case T8140:
+        case T8142: // M5 Hidra — same start mechanism as its M4/A18 siblings (TODO(m5): verify on HW)
             cpu_start_off = CPU_START_OFF_T8112;
             break;
         case T6020:
