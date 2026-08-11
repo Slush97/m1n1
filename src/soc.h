@@ -49,8 +49,16 @@
 #define EARLY_UART_BASE 0x2a1200000
 #elif TARGET == T8132
 #define EARLY_UART_BASE 0x3ad200000
-#elif TARGET == T8140 || TARGET == T8142
+#elif TARGET == T8140
 #define EARLY_UART_BASE 0x385200000
+#elif TARGET == T8142
+/*
+ * T8142 (M5 "Hidra") does NOT share the T8140 UART base. From the M5 ADT:
+ * /arm-io/uart0 reg = 0x195200000 (bus), /arm-io ranges bus 0x0 -> parent
+ * 0x210000000, so the physical base is 0x3a5200000. Confirmed independently on
+ * two machines: Mac17,2/J704 (macOS 26.4) and Mac17,3/J813 (macOS 26.5.1).
+ */
+#define EARLY_UART_BASE 0x3a5200000
 #elif TARGET == T6034 || TARGET == T6031
 #define EARLY_UART_BASE 0x391200000
 #elif TARGET == T8015
