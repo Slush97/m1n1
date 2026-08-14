@@ -2899,7 +2899,7 @@ int kboot_boot(void *kernel)
 
     usb_init();
     pcie_init();
-    dapf_init_all();
+    // dapf_init_all();  // t8142: no DAPF table yet
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
