@@ -176,6 +176,7 @@ static char *chosen[MAX_CHOSEN_VARS];
 #endif
 
 static bool enable_tso = false;
+static bool enable_smp = true;
 
 static bool check_var(u8 **p)
 {
@@ -205,6 +206,8 @@ static bool check_var(u8 **p)
         mitigations_configure(val);
     } else if (IS_VAR("tso=")) {
         enable_tso = val[0] == '1';
+    } else if (IS_VAR("smp=")) {
+        enable_smp = val[0] != '0';
     } else {
         printf("Unknown variable %s\n", *p);
     }
@@ -315,7 +318,10 @@ int payload_run(void)
 
     if (kernel && fdt) {
         cpufreq_init();
-        smp_start_secondaries();
+        if (enable_smp)
+            smp_start_secondaries();
+        else
+            printf("Skipping secondary CPUs (smp=0)\n");
         mitigations_perform();
         if (enable_tso) {
 
