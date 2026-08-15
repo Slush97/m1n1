@@ -267,6 +267,16 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_TIMER_CTL_MAP(SYS_CNTP_CTL_EL0, SYS_CNTP_CTL_EL02, ptimer_pending, ptimer_injected)
         SYSREG_TIMER_MAP(SYS_CNTP_CVAL_EL0, SYS_CNTP_CVAL_EL02, ptimer_pending, ptimer_injected)
         SYSREG_TIMER_MAP(SYS_CNTP_TVAL_EL0, SYS_CNTP_TVAL_EL02, ptimer_pending, ptimer_injected)
+        /*
+         * Linux updates GCR_EL1 on every exception return when MTE is
+         * enabled. These registers trap on t8142 even without HCR.TID5, so
+         * handling them through the proxy turns every exception into a USB
+         * round trip and can starve timer delivery.
+         */
+        SYSREG_PASS(sys_reg(3, 0, 1, 0, 5)) // RGSR_EL1
+        SYSREG_PASS(sys_reg(3, 0, 1, 0, 6)) // GCR_EL1
+        SYSREG_PASS(sys_reg(3, 0, 5, 6, 0)) // TFSR_EL1
+        SYSREG_PASS(sys_reg(3, 0, 5, 6, 1)) // TFSRE0_EL1
         case SYSREG_ISS(sys_reg(3, 3, 13, 0, 5)): // TPIDR2_EL0
             if (is_read)
                 regs[rt] = PERCPU(guest_tpidr2_el0);
