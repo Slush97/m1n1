@@ -19,6 +19,7 @@ struct hv_pcpu_data {
     u32 ipi_queued;
     u32 ipi_pending;
     u32 pmc_pending;
+    u64 guest_tpidr2_el0;
     u64 pmc_irq_mode;
     u64 exc_entry_pmcr0_cnt;
     u64 mdscr;
@@ -213,6 +214,12 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_MAP(SYS_CNTP_CTL_EL0, SYS_CNTP_CTL_EL02)
         SYSREG_MAP(SYS_CNTP_CVAL_EL0, SYS_CNTP_CVAL_EL02)
         SYSREG_MAP(SYS_CNTP_TVAL_EL0, SYS_CNTP_TVAL_EL02)
+        case SYSREG_ISS(sys_reg(3, 3, 13, 0, 5)): // TPIDR2_EL0
+            if (is_read)
+                regs[rt] = PERCPU(guest_tpidr2_el0);
+            else
+                PERCPU(guest_tpidr2_el0) = regs[rt];
+            return true;
         /* Spammy stuff seen on t600x p-cores */
         /* These are PMU/PMC registers */
         SYSREG_PASS(sys_reg(3, 2, 15, 12, 0));
