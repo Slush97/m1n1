@@ -2899,7 +2899,18 @@ int kboot_boot(void *kernel)
 
     usb_init();
     pcie_init();
-    // dapf_init_all();  // t8142: SError (L2C_ERR_STS 0x82) - tested 2026-08-14
+    /*
+     * LOCAL (t8142): dapf_init_all() takes an L2C SError at 0x380714004. That
+     * address is /arm-io/dart-aop reg[1], the first dapf_entries[] element, so
+     * it dies before reaching anything else. On this SoC 0x380714000 appears as
+     * a trailing reg entry on every DART node and does not answer. dart-mtp's
+     * own DAPF window is reg[1] = 0x394810000 and has never been programmed;
+     * MTP cannot reach its pre-loaded firmware, so try just that one.
+     */
+    if (chip_id == T8142)
+        dapf_init("/arm-io/dart-mtp", 1);
+    else
+        dapf_init_all();
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
