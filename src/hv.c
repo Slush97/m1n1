@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "pcie.h"
 #include "smp.h"
+#include "soc.h"
 #include "string.h"
 #include "usb.h"
 #include "utils.h"
@@ -388,11 +389,15 @@ void hv_set_elr(u64 val)
 
 void hv_arm_tick(bool secondary)
 {
-    if (secondary)
-        msr(CNTP_TVAL_EL0, hv_secondary_tick_interval);
-    else
-        msr(CNTP_TVAL_EL0, hv_tick_interval);
-    msr(CNTP_CTL_EL0, CNTx_CTL_ENABLE);
+    u64 interval = secondary ? hv_secondary_tick_interval : hv_tick_interval;
+
+    if (chip_id == T8142) {
+        msr(CNTHP_TVAL_EL2, interval);
+        msr(CNTHP_CTL_EL2, CNTx_CTL_ENABLE);
+    } else {
+        msr(CNTP_TVAL_EL0, interval);
+        msr(CNTP_CTL_EL0, CNTx_CTL_ENABLE);
+    }
 }
 
 void hv_maybe_exit(void)

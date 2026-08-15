@@ -5,6 +5,7 @@
 #include "cpu_regs.h"
 #include "exception.h"
 #include "smp.h"
+#include "soc.h"
 #include "string.h"
 #include "uart.h"
 #include "uartproxy.h"
@@ -19,6 +20,10 @@ struct hv_pcpu_data {
     u32 ipi_queued;
     u32 ipi_pending;
     u32 pmc_pending;
+    u32 ptimer_pending;
+    u32 vtimer_pending;
+    u32 ptimer_injected;
+    u32 vtimer_injected;
     u64 guest_tpidr2_el0;
     u64 pmc_irq_mode;
     u64 exc_entry_pmcr0_cnt;
@@ -147,32 +152,56 @@ void hv_add_time(s64 time)
     stolen_time -= (u64)time;
 }
 
-static void hv_update_fiq(void)
+static void hv_update_fiq(u64 guest_spsr)
 {
     u64 hcr = mrs(HCR_EL2);
     bool fiq_pending = false;
+    bool ptimer_ready = false;
+    bool vtimer_ready = false;
+    bool has_vm_timer_fiq_ena = chip_id != T8142;
+    u64 pctl = mrs(CNTP_CTL_EL02);
+    u64 vctl = mrs(CNTV_CTL_EL02);
 
-    if (mrs(CNTP_CTL_EL02) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
-        fiq_pending = true;
-        reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
-    } else {
+    if (pctl == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+        if (has_vm_timer_fiq_ena) {
+            fiq_pending = true;
+            reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
+        } else {
+            PERCPU(ptimer_pending) = true;
+            msr(CNTP_CTL_EL02, pctl | CNTx_CTL_IMASK);
+        }
+    } else if (has_vm_timer_fiq_ena) {
         reg_set(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_P);
     }
 
-    if (mrs(CNTV_CTL_EL02) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
-        fiq_pending = true;
-        reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
-    } else {
+    if (vctl == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+        if (has_vm_timer_fiq_ena) {
+            fiq_pending = true;
+            reg_clr(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
+        } else {
+            PERCPU(vtimer_pending) = true;
+            msr(CNTV_CTL_EL02, vctl | CNTx_CTL_IMASK);
+        }
+    } else if (has_vm_timer_fiq_ena) {
         reg_set(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2, VM_TMR_FIQ_ENA_ENA_V);
     }
 
     fiq_pending |= PERCPU(ipi_pending) || PERCPU(pmc_pending);
+    if (!(guest_spsr & SPSR_F)) {
+        ptimer_ready = PERCPU(ptimer_pending) && !PERCPU(ptimer_injected);
+        vtimer_ready = PERCPU(vtimer_pending) && !PERCPU(vtimer_injected);
+        fiq_pending |= ptimer_ready || vtimer_ready;
+    }
 
     sysop("isb");
 
     if ((hcr & HCR_VF) && !fiq_pending) {
         hv_write_hcr(hcr & ~HCR_VF);
     } else if (!(hcr & HCR_VF) && fiq_pending) {
+        if (ptimer_ready)
+            PERCPU(ptimer_injected) = true;
+        if (vtimer_ready)
+            PERCPU(vtimer_injected) = true;
         hv_write_hcr(hcr | HCR_VF);
     }
 }
@@ -183,6 +212,30 @@ static void hv_update_fiq(void)
             regs[rt] = _mrs(sr_tkn(to));                                                           \
         else                                                                                       \
             _msr(sr_tkn(to), regs[rt]);                                                            \
+        return true;
+
+#define SYSREG_TIMER_MAP(sr, to, pending, injected)                                                \
+    case SYSREG_ISS(sr):                                                                           \
+        if (is_read) {                                                                             \
+            regs[rt] = _mrs(sr_tkn(to));                                                           \
+        } else {                                                                                   \
+            PERCPU(pending) = false;                                                               \
+            PERCPU(injected) = false;                                                              \
+            _msr(sr_tkn(to), regs[rt]);                                                            \
+        }                                                                                          \
+        return true;
+
+#define SYSREG_TIMER_CTL_MAP(sr, to, pending, injected)                                            \
+    case SYSREG_ISS(sr):                                                                           \
+        if (is_read) {                                                                             \
+            regs[rt] = _mrs(sr_tkn(to));                                                           \
+            if (chip_id == T8142 && PERCPU(pending))                                               \
+                regs[rt] &= ~CNTx_CTL_IMASK;                                                       \
+        } else {                                                                                   \
+            PERCPU(pending) = false;                                                               \
+            PERCPU(injected) = false;                                                              \
+            _msr(sr_tkn(to), regs[rt]);                                                            \
+        }                                                                                          \
         return true;
 
 #define SYSREG_PASS(sr)                                                                            \
@@ -208,12 +261,12 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(SYS_IMP_APL_CORE_NRG_ACC_DAT);
         SYSREG_PASS(SYS_IMP_APL_CORE_SRM_NRG_ACC_DAT);
         /* Architectural timer, for ECV */
-        SYSREG_MAP(SYS_CNTV_CTL_EL0, SYS_CNTV_CTL_EL02)
-        SYSREG_MAP(SYS_CNTV_CVAL_EL0, SYS_CNTV_CVAL_EL02)
-        SYSREG_MAP(SYS_CNTV_TVAL_EL0, SYS_CNTV_TVAL_EL02)
-        SYSREG_MAP(SYS_CNTP_CTL_EL0, SYS_CNTP_CTL_EL02)
-        SYSREG_MAP(SYS_CNTP_CVAL_EL0, SYS_CNTP_CVAL_EL02)
-        SYSREG_MAP(SYS_CNTP_TVAL_EL0, SYS_CNTP_TVAL_EL02)
+        SYSREG_TIMER_CTL_MAP(SYS_CNTV_CTL_EL0, SYS_CNTV_CTL_EL02, vtimer_pending, vtimer_injected)
+        SYSREG_TIMER_MAP(SYS_CNTV_CVAL_EL0, SYS_CNTV_CVAL_EL02, vtimer_pending, vtimer_injected)
+        SYSREG_TIMER_MAP(SYS_CNTV_TVAL_EL0, SYS_CNTV_TVAL_EL02, vtimer_pending, vtimer_injected)
+        SYSREG_TIMER_CTL_MAP(SYS_CNTP_CTL_EL0, SYS_CNTP_CTL_EL02, ptimer_pending, ptimer_injected)
+        SYSREG_TIMER_MAP(SYS_CNTP_CVAL_EL0, SYS_CNTP_CVAL_EL02, ptimer_pending, ptimer_injected)
+        SYSREG_TIMER_MAP(SYS_CNTP_TVAL_EL0, SYS_CNTP_TVAL_EL02, ptimer_pending, ptimer_injected)
         case SYSREG_ISS(sys_reg(3, 3, 13, 0, 5)): // TPIDR2_EL0
             if (is_read)
                 regs[rt] = PERCPU(guest_tpidr2_el0);
@@ -433,7 +486,7 @@ static void hv_exc_entry(void)
 static void hv_exc_exit(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('x');
-    hv_update_fiq();
+    hv_update_fiq(ctx->spsr);
     /* reenable PMU counters */
     reg_set(SYS_IMP_APL_PMCR0, PERCPU(exc_entry_pmcr0_cnt));
     msr(CNTVOFF_EL2, stolen_time);
@@ -473,7 +526,7 @@ void hv_exc_sync(struct exc_info *ctx)
         hv_wdt_breadcrumb('#');
         ctx->elr += 4;
         hv_set_elr(ctx->elr);
-        hv_update_fiq();
+        hv_update_fiq(ctx->spsr);
         hv_wdt_breadcrumb('s');
         return;
     }
@@ -531,9 +584,16 @@ void hv_exc_fiq(struct exc_info *ctx)
 
     hv_maybe_exit();
 
-    if (mrs(CNTP_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
-        msr(CNTP_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
-        tick = true;
+    if (chip_id == T8142) {
+        if (mrs(CNTHP_CTL_EL2) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+            msr(CNTHP_CTL_EL2, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
+            tick = true;
+        }
+    } else {
+        if (mrs(CNTP_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+            msr(CNTP_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
+            tick = true;
+        }
     }
 
     int interruptible_cpu = hv_pinned_cpu;
@@ -542,7 +602,7 @@ void hv_exc_fiq(struct exc_info *ctx)
 
     if (smp_id() != interruptible_cpu && !(mrs(ISR_EL1) & 0x40) && hv_want_cpu == -1) {
         // Non-interruptible CPU and it was just a timer tick (or spurious), so just update FIQs
-        hv_update_fiq();
+        hv_update_fiq(hv_get_spsr());
         hv_arm_tick(true);
         return;
     }
@@ -562,7 +622,8 @@ void hv_exc_fiq(struct exc_info *ctx)
         }
     }
 
-    if (mrs(CNTV_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+    u64 cntv_ctl = mrs(CNTV_CTL_EL0);
+    if (cntv_ctl == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
         msr(CNTV_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
         hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
     }
