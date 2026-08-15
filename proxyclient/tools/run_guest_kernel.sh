@@ -64,6 +64,9 @@ fi
 if [ -n "${esp}" ]; then
     echo "chosen.asahi,efi-system-partition=${esp}" >>"$TMPDIR/m1n1-linux.bin"
 fi
+if [ -n "${M1N1_SMP}" ]; then
+    echo "smp=${M1N1_SMP}" >>"$TMPDIR/m1n1-linux.bin"
+fi
 
 cat "$kernel_base"/arch/arm64/boot/dts/apple/*.dtb >>"$TMPDIR/m1n1-linux.bin"
 if [[ "$kernel" == *.gz ]]; then
