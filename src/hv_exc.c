@@ -36,6 +36,7 @@ void hv_exit_guest(void) __attribute__((noreturn));
 
 static u64 stolen_time = 0;
 static u64 exc_entry_time;
+static u64 tick_heals = 0;
 
 extern u64 hv_cpus_in_guest;
 extern int hv_pinned_cpu;
@@ -156,8 +157,6 @@ static void hv_update_fiq(u64 guest_spsr)
 {
     u64 hcr = mrs(HCR_EL2);
     bool fiq_pending = false;
-    bool ptimer_ready = false;
-    bool vtimer_ready = false;
     bool has_vm_timer_fiq_ena = chip_id != T8142;
     u64 pctl = mrs(CNTP_CTL_EL02);
     u64 vctl = mrs(CNTV_CTL_EL02);
@@ -187,10 +186,40 @@ static void hv_update_fiq(u64 guest_spsr)
     }
 
     fiq_pending |= PERCPU(ipi_pending) || PERCPU(pmc_pending);
-    if (!(guest_spsr & SPSR_F)) {
-        ptimer_ready = PERCPU(ptimer_pending) && !PERCPU(ptimer_injected);
-        vtimer_ready = PERCPU(vtimer_pending) && !PERCPU(vtimer_injected);
-        fiq_pending |= ptimer_ready || vtimer_ready;
+    /*
+     * Pure level semantics, like the real timer FIQ wiring: VF stays
+     * asserted for as long as an expiry is pending, with no SPSR_F gate and
+     * no injected-once latch. Hardware defers delivery until the guest
+     * unmasks FIQs, and a pending VF is what wakes its WFI. The guest
+     * taking the vFIQ leads to a timer register write, whose trap clears
+     * pending -- that is what drops VF, and re-injection cannot loop for
+     * the same reason a level FIQ line cannot: handling clears the source.
+     *
+     * Both alternatives were shown to latch an idle guest on hardware
+     * (2026-08-15): gating on the trapped SPSR_F samples the WFI window
+     * essentially every time on an idle guest and never injects; marking
+     * injected-once drops VF on the next poll before the slow WFI wake
+     * path has taken the vFIQ, losing the expiry outright.
+     */
+    (void)guest_spsr;
+    fiq_pending |= PERCPU(ptimer_pending) || PERCPU(vtimer_pending);
+
+    /*
+     * t8142: the hv tick must never sit handled-but-unarmed. It does, rarely
+     * and fatally: some path masks CNTHP in hv_exc_fiq and loses the re-arm,
+     * and with the tick dead nothing polls the guest timers or wakes an idle
+     * guest -- the boot latches (observed twice in one probe session, with
+     * the re-arm otherwise cycling fine for seconds). Until the losing path
+     * is identified, heal it here (this runs on every exception exit) and
+     * leave a breadcrumb.
+     */
+    if (!has_vm_timer_fiq_ena &&
+        mrs(CNTHP_CTL_EL2) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE | CNTx_CTL_IMASK)) {
+        int icpu = hv_pinned_cpu == -1 ? boot_cpu_idx : hv_pinned_cpu;
+        hv_arm_tick(smp_id() != icpu);
+        tick_heals++;
+        if (tick_heals <= 8 || !(tick_heals & 1023))
+            printf("HV: healed dead tick (heal #%lu)\n", tick_heals);
     }
 
     sysop("isb");
@@ -198,10 +227,6 @@ static void hv_update_fiq(u64 guest_spsr)
     if ((hcr & HCR_VF) && !fiq_pending) {
         hv_write_hcr(hcr & ~HCR_VF);
     } else if (!(hcr & HCR_VF) && fiq_pending) {
-        if (ptimer_ready)
-            PERCPU(ptimer_injected) = true;
-        if (vtimer_ready)
-            PERCPU(vtimer_injected) = true;
         hv_write_hcr(hcr | HCR_VF);
     }
 }
@@ -632,10 +657,19 @@ void hv_exc_fiq(struct exc_info *ctx)
         }
     }
 
-    u64 cntv_ctl = mrs(CNTV_CTL_EL0);
-    if (cntv_ctl == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
-        msr(CNTV_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
-        hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
+    /*
+     * On t8142 the EL0 timer encodings at EL2 alias the *guest's* timers --
+     * there is no VHE redirect to CNTHV/CNTHP (proven by mrs comparison on
+     * hardware: EL0 and EL02 encodings return identical values). This "hv
+     * vtimer" check would therefore steal a live guest clockevent expiry:
+     * mask it with no pending bookkeeping, and proxy a bogus HV_VTIMER.
+     */
+    if (chip_id != T8142) {
+        u64 cntv_ctl = mrs(CNTV_CTL_EL0);
+        if (cntv_ctl == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
+            msr(CNTV_CTL_EL0, CNTx_CTL_ISTATUS | CNTx_CTL_IMASK | CNTx_CTL_ENABLE);
+            hv_exc_proxy(ctx, START_HV, HV_VTIMER, NULL);
+        }
     }
 
     u64 reg = mrs(SYS_IMP_APL_PMCR0);
