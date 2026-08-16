@@ -24,7 +24,7 @@
 //#define TARGET_BOARD 0x34
 
 // Switch the DFU USB-C port to debugusb
-// #define USE_DEBUG_USB
+#define USE_DEBUG_USB
 
 #ifdef RELEASE
 # define FB_SILENT_MODE
