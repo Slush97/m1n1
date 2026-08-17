@@ -306,14 +306,21 @@ class ProxyUtils(Reloadable):
     def print_l2c_regs(self):
         print()
         print("  == L2C Registers ==")
-        l2c_err_sts = self.mrs(L2C_ERR_STS_EL1)
+        # LOCAL (t8142): these Apple sysregs are locked (reads may work but
+        # the L2C_ERR_STS clear-write UNDEFs), and a ProxyError here kills
+        # the exception handler mid-dump, orphaning the whole hv session.
+        # Diagnostics must never be fatal.
+        try:
+            l2c_err_sts = self.mrs(L2C_ERR_STS_EL1)
 
-        print(f"  L2C_ERR_STS: {l2c_err_sts:#x}")
-        print(f"  L2C_ERR_ADR: {self.mrs(L2C_ERR_ADR_EL1):#x}");
-        print(f"  L2C_ERR_INF: {self.mrs(L2C_ERR_INF_EL1):#x}");
+            print(f"  L2C_ERR_STS: {l2c_err_sts:#x}")
+            print(f"  L2C_ERR_ADR: {self.mrs(L2C_ERR_ADR_EL1):#x}");
+            print(f"  L2C_ERR_INF: {self.mrs(L2C_ERR_INF_EL1):#x}");
 
-        self.msr(L2C_ERR_STS_EL1, l2c_err_sts) # Clear the flag bits
-        self.msr(DAIF, self.mrs(DAIF) | 0x100) # Re-enable SError exceptions
+            self.msr(L2C_ERR_STS_EL1, l2c_err_sts) # Clear the flag bits
+            self.msr(DAIF, self.mrs(DAIF) | 0x100) # Re-enable SError exceptions
+        except Exception as e:
+            print(f"  (L2C register access failed: {e})")
 
     def print_context(self, ctx, is_fault=True, addr=lambda a: f"0x{a:x}", sym=None, num_ctx=9):
         print(f"  == Exception taken from {ctx.spsr.M.name} ==")
