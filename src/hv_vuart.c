@@ -32,8 +32,28 @@ static void update_irq(void)
         else
             ufstat = FIELD_PREP(UFSTAT_RXCNT, rx_queued);
 
-        if (FIELD_GET(UCON_RXMODE, ucon) == UCON_MODE_IRQ && ucon & UCON_RXTO_ENA) {
-            utrstat |= UTRSTAT_RXTO;
+        if (FIELD_GET(UCON_RXMODE, ucon) == UCON_MODE_IRQ) {
+            /*
+             * LOCAL ONLY - NOT FOR SUBMISSION: raise the RX FIFO-threshold
+             * interrupt whenever data is queued, not only the RX timeout.
+             * The Apple s5l guest driver (apple_s5l_serial_startup) enables
+             * BOTH RXTHRESH_ENA and RXTO_ENA and relies on RXTHRESH as the
+             * primary RX wakeup under load; RXTO is only the idle-gap
+             * backstop. This emulation previously set RXTO alone, so under a
+             * sustained saturating download (SLIP-over-vuart) the line never
+             * idles, RXTO never fires, the guest is never woken, the 1 MB CDC
+             * RX ring fills and ringbuffer_write() silently drops bytes ->
+             * corrupt SLIP frames -> dead link (guest still alive). Setting
+             * RXTHRESH on data-available restores prompt, level-triggered
+             * wakeups and bounds the guest's drain to FIFO bursts. Safe: it
+             * is a superset of the old behaviour (never fewer interrupts),
+             * clears when the ring drains, and is gated on the guest actually
+             * enabling RXTHRESH_ENA.
+             */
+            if (ucon & UCON_RXTHRESH_ENA)
+                utrstat |= UTRSTAT_RXTHRESH;
+            if (ucon & UCON_RXTO_ENA)
+                utrstat |= UTRSTAT_RXTO;
         }
     }
 
