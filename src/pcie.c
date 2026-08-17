@@ -228,6 +228,29 @@ static const struct reg_info regs_t6031 = {
     .axi_idx = 4,
 };
 
+/*
+ * t8142 (M5) shared regs:
+ *   [0] config/ECAM, [1] rc, [2] PHY block 0x27f000000/0x40000
+ *   (+0x4000 common, +0x8000 phy0, +0x10000.. per-port phys),
+ *   [3] phy-ip (pll/auspma tunable offsets extend past its declared 0x4000
+ *   size but stay inside the [2] 0x40000 window), [4] second phy-ip-like
+ *   window 0x27f040000/0x20000, [5] axi2af 0x27e000000/0x1000000,
+ *   [6]/[7] unknown. axi_idx is 5, not t6031's 4: the axi2af tunables
+ *   reach offset 0x20058, which does not fit [4]'s 0x20000.
+ */
+static const struct reg_info regs_t8142 = {
+    .type = APCIE_T6031,
+    .compat = APCIE_T8122,
+    .shared_reg_count = 8,
+    .config_idx = 0,
+    .rc_idx = 1,
+    .phy_common_idx = 2,
+    .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
+    .phy_ip_idx = 3,
+    .axi_idx = 5,
+};
+
 static bool pcie_initialized = false;
 
 enum PCIE_CONTROLLERS {
@@ -304,6 +327,10 @@ static int pcie_init_controller(int controller, const char *path)
         fuse_bits = NULL;
         state->pcie_regs = &regs_t6031;
         printf("pcie: Initializing t6031 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t8142")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8142;
+        printf("pcie: Initializing t8142 PCIe controller\n");
     } else if (adt_is_compatible(adt, adt_offset, "apcie,t8132")) {
         fuse_bits = NULL;
         state->pcie_regs = &regs_t8132;
