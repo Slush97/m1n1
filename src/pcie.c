@@ -281,6 +281,13 @@ static const struct reg_info regs_t8142 = {
     .phy_off = 0,
     .phy_common_off = 0x4000,
     .no_shared_phy = true,
+    /*
+     * v3 died at reg[4]+0x90 -- the FIRST pll tunable write -- so reg[4]
+     * is not host-writable in this state either (unpowered, gated behind
+     * later port init, or the phy-ip tunables just aren't host-applied
+     * on t8142). Skip them; revisit via an hv trace of macOS bring-up.
+     */
+    .no_phy_ip_tunables = true,
 };
 
 static bool pcie_initialized = false;
