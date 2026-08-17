@@ -156,6 +156,11 @@ struct reg_info {
     int axi_idx;
     int fuse_idx;
     bool alt_phy_start;
+    /* T8122-compat only: offsets added to the reg[phy_idx] base */
+    int phy_off;
+    int phy_common_off;
+    /* skip every MMIO touch of the shared PHY block (t8142: decode hole) */
+    bool no_shared_phy;
 };
 
 static const struct reg_info regs_t8xxx_t600x = {
@@ -199,6 +204,8 @@ static const struct reg_info regs_t8122 = {
     .phy_ip_idx = 3,
     .axi_idx = 4,
     .fuse_idx = 5,
+    .phy_off = 0x8000,
+    .phy_common_off = 0x4000,
 };
 
 static const struct reg_info regs_t8132 = {
@@ -213,6 +220,8 @@ static const struct reg_info regs_t8132 = {
     .phy_ip_idx = 3,
     .axi_idx = 4,
     .fuse_idx = 5,
+    .phy_off = 0x8000,
+    .phy_common_off = 0x4000,
 };
 
 static const struct reg_info regs_t6031 = {
@@ -226,6 +235,8 @@ static const struct reg_info regs_t6031 = {
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 4,
+    .phy_off = 0x8000,
+    .phy_common_off = 0x4000,
 };
 
 /*
@@ -249,6 +260,8 @@ static const struct reg_info regs_t8142 = {
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 5,
+    .phy_off = 0x8000,
+    .phy_common_off = 0x4000,
 };
 
 static bool pcie_initialized = false;
@@ -417,8 +430,8 @@ static int pcie_init_controller(int controller, const char *path)
     if (state->pcie_regs->compat == APCIE_T8122) {
         // The T8122 init seems very similar to the T602X, with different offsets,
         // and with reg[2], [3] and [4] coalesced to reg[2] in the ADT.
-        state->phy_base[0] = state->phy_base[0] + 0x8000;
-        state->phy_common_base += 0x4000;
+        state->phy_base[0] = state->phy_base[0] + state->pcie_regs->phy_off;
+        state->phy_common_base += state->pcie_regs->phy_common_off;
     }
 
     for (int phy = 1; phy < state->num_phys; phy++) {
@@ -496,26 +509,30 @@ static int pcie_init_controller(int controller, const char *path)
     }
 
     for (int phy = 0; phy < state->num_phys; phy++) {
-        printf("pcie: dbg: phy %d clk req @0x%lx\n", phy, state->phy_base[phy]);
-        set32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0REQ);
-        if (poll32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0ACK,
-                   APCIE_PHY_CTRL_CLK0ACK, 50000)) {
-            printf("pcie: Timeout enabling PHY CLK0\n");
-            return -1;
-        }
+        if (!state->pcie_regs->no_shared_phy) {
+            printf("pcie: dbg: phy %d clk req @0x%lx\n", phy, state->phy_base[phy]);
+            set32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0REQ);
+            if (poll32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0ACK,
+                       APCIE_PHY_CTRL_CLK0ACK, 50000)) {
+                printf("pcie: Timeout enabling PHY CLK0\n");
+                return -1;
+            }
 
-        set32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1REQ);
-        if (poll32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1ACK,
-                   APCIE_PHY_CTRL_CLK1ACK, 50000)) {
-            printf("pcie: Timeout enabling PHY CLK1\n");
-            return -1;
-        }
+            set32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1REQ);
+            if (poll32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1ACK,
+                       APCIE_PHY_CTRL_CLK1ACK, 50000)) {
+                printf("pcie: Timeout enabling PHY CLK1\n");
+                return -1;
+            }
 
-        clear32(state->phy_base[phy] + APCIE_PHY_CTRL, state->pcie_regs->phy_ctrl_reset);
-        udelay(1);
+            clear32(state->phy_base[phy] + APCIE_PHY_CTRL, state->pcie_regs->phy_ctrl_reset);
+            udelay(1);
+        }
 
         /* ??? */
-        if (state->pcie_regs->type == APCIE_T81XX) {
+        if (state->pcie_regs->no_shared_phy) {
+            /* no shared PHY block: tunables below are the whole per-phy init */
+        } else if (state->pcie_regs->type == APCIE_T81XX) {
             set32(state->rc_base + APCIE_PHYIF_CTRL, APCIE_PHYIF_CTRL_RUN);
             udelay(1);
         } else if (state->pcie_regs->type == APCIE_T602X ||
@@ -553,7 +570,9 @@ static int pcie_init_controller(int controller, const char *path)
             return -1;
         }
 
-        if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
+        if (!state->pcie_regs->no_shared_phy &&
+            (state->pcie_regs->type == APCIE_T602X ||
+             state->pcie_regs->compat == APCIE_T8122)) {
             set32(state->phy_base[phy] + 4, 0x10);
         }
     }
@@ -564,11 +583,12 @@ static int pcie_init_controller(int controller, const char *path)
 
         // Why always PHY 1 in this case?
         u32 off = state->num_phys > 1 ? PHY_STRIDE : 0;
-        if (poll32(state->phy_base[0] + off + 0x8, 1, 1, 250000)) {
+        if (!state->pcie_regs->no_shared_phy &&
+            poll32(state->phy_base[0] + off + 0x8, 1, 1, 250000)) {
             printf("pcie: PHY clock enable timed out\n");
             return -1;
         }
-        for (int phy = 0; phy < state->num_phys; phy++) {
+        for (int phy = 0; !state->pcie_regs->no_shared_phy && phy < state->num_phys; phy++) {
             if (state->pcie_regs->type == APCIE_T602X) {
                 set32(state->phy_base[phy] + APCIE_PHY_CTRL, 0x300);
             } else if (state->pcie_regs->compat == APCIE_T8122) {
@@ -912,7 +932,8 @@ int pcie_shutdown(void)
             clear32(state->port_base[port] + APCIE_PORT_APPCLK, APCIE_PORT_APPCLK_EN);
         }
 
-        for (int phy = 0; phy < state->num_phys; phy++) {
+        for (int phy = 0; !state->pcie_regs->no_shared_phy && phy < state->num_phys;
+             phy++) {
             clear32(state->phy_base[phy] + APCIE_PHY_CTRL, state->pcie_regs->phy_ctrl_reset);
             clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1REQ);
             clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0REQ);
