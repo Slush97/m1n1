@@ -448,11 +448,13 @@ static int pcie_init_controller(int controller, const char *path)
     int port_reg_cnt = port_regs / state->port_count;
     printf("pcie: ADT uses %d reg entries per port\n", port_reg_cnt);
 
+    printf("pcie: dbg: pmgr power enable\n");
     if (pmgr_adt_power_enable(path)) {
         printf("pcie: Error enabling power for %s\n", path);
         return -1;
     }
 
+    printf("pcie: dbg: axi2af apply (reg[%d] = 0x%lx)\n", state->pcie_regs->axi_idx, state->axi_base);
     if (!adt_getprop(adt, adt_offset, "apcie-axi2af-tunables", NULL)) {
         printf("pcie: No axi2af tunables\n");
     } else if (tunables_apply_local(path, "apcie-axi2af-tunables", state->pcie_regs->axi_idx)) {
@@ -461,6 +463,7 @@ static int pcie_init_controller(int controller, const char *path)
     }
 
     /* ??? */
+    printf("pcie: dbg: rc write @0x%lx\n", state->rc_base);
     if (controller == APCIE)
         write32(state->rc_base + 0x4, 0);
 
@@ -475,6 +478,7 @@ static int pcie_init_controller(int controller, const char *path)
      * Initialize PHY.
      */
 
+    printf("pcie: dbg: phy tunables (reg[%d] = 0x%lx)\n", state->pcie_regs->phy_idx, state->phy_base[0]);
     if (!adt_getprop(adt, adt_offset, "apcie-phy-tunables", NULL)) {
         printf("pcie: No PHY tunables\n");
     } else if (tunables_apply_local(path, "apcie-phy-tunables", state->pcie_regs->phy_idx)) {
@@ -482,6 +486,7 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
+    printf("pcie: dbg: refclk poll @0x%lx\n", state->phy_common_base);
     if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->type == APCIE_T6031) {
         if (poll32(state->phy_common_base + APCIE_PHYCMN_CLK, APCIE_PHYCMN_CLK_100MHZ,
                    APCIE_PHYCMN_CLK_100MHZ, 250000)) {
@@ -491,6 +496,7 @@ static int pcie_init_controller(int controller, const char *path)
     }
 
     for (int phy = 0; phy < state->num_phys; phy++) {
+        printf("pcie: dbg: phy %d clk req @0x%lx\n", phy, state->phy_base[phy]);
         set32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0REQ);
         if (poll32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0ACK,
                    APCIE_PHY_CTRL_CLK0ACK, 50000)) {
@@ -655,6 +661,9 @@ static int pcie_init_controller(int controller, const char *path)
             clear32(state->axi_base + 0x600, BIT(16));
         }
 
+        printf("pcie: dbg: port %d regs @0x%lx ltssm 0x%lx phy 0x%lx intr2axi 0x%lx\n",
+               port, state->port_base[port], state->port_ltssm_base[port],
+               state->port_phy_base[port], state->port_intr2axi_base[port]);
         if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
             write32(state->port_base[port] + 0x88, 0x110);
             write32(state->port_base[port] + 0x100, 0xffffffff);
