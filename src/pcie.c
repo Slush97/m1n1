@@ -260,8 +260,18 @@ static const struct reg_info regs_t8142 = {
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 5,
-    .phy_off = 0x8000,
+    /*
+     * Probed 2026-08-17: reg[2]+0x0 and +0x8000 both take sync external
+     * aborts (the +0x0 one uncontainable even under exc_guard -- it wedged
+     * the machine into an exception loop). Live subranges: +0x4000
+     * (phy common, refclk bit set), +0x10000..0x20000 (per-port phys,
+     * tunable targets), +0x20000 (phy-ip). So: no shared PHY block on
+     * t8142; the per-port init + phy-ip tunables are the whole dance.
+     * phy_off is unused with no_shared_phy and set to 0 deliberately.
+     */
+    .phy_off = 0,
     .phy_common_off = 0x4000,
+    .no_shared_phy = true,
 };
 
 static bool pcie_initialized = false;
