@@ -57,6 +57,14 @@ static struct hv_secondary_info_t hv_secondary_info;
 void hv_init(void)
 {
     pcie_shutdown();
+    /*
+     * t8142: the guest DT expects an m1n1-initialized PCIe controller
+     * (Linux pcie-apple applies no PHY setup), exactly as in direct kboot.
+     * Re-init after the quiesce so the guest sees a live RC; per-port
+     * link-up still happens in Linux, which also drives pwren via SMC.
+     */
+    if (chip_id == T8142)
+        pcie_init();
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
     if (display_is_external && display_start_dcp() >= 0)
         display_shutdown(DCP_QUIESCED);
