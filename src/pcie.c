@@ -161,6 +161,8 @@ struct reg_info {
     int phy_common_off;
     /* skip every MMIO touch of the shared PHY block (t8142: decode hole) */
     bool no_shared_phy;
+    /* fallback: skip the phy-ip pll/auspma tunables entirely */
+    bool no_phy_ip_tunables;
 };
 
 static const struct reg_info regs_t8xxx_t600x = {
@@ -258,7 +260,14 @@ static const struct reg_info regs_t8142 = {
     .phy_common_idx = 2,
     .phy_idx = 2,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
-    .phy_ip_idx = 3,
+    /*
+     * phy_ip is reg[4] (0x27f040000/0x20000), NOT reg[3]: the v2 run
+     * faulted at reg[3]+0x501c -- the first pll tunable offset past
+     * reg[3]'s declared 0x4000 size (the five entries below 0x4000 all
+     * landed). ADT reg sizes are real on t8142. Both tunable sets fit
+     * reg[4] exactly (pll max 0x62e8, auspma max 0x1e404 < 0x20000).
+     */
+    .phy_ip_idx = 4,
     .axi_idx = 5,
     /*
      * Probed 2026-08-17: reg[2]+0x0 and +0x8000 both take sync external
@@ -571,13 +580,18 @@ static int pcie_init_controller(int controller, const char *path)
             snprintf(auspma_prop, sizeof(auspma_prop), "apcie-phy-%d-ip-auspma-tunables", phy);
         }
 
-        if (tunables_apply_local_addr(path, pll_prop, state->phy_ip_base[phy])) {
-            printf("pcie: Error applying %s for %s\n", pll_prop, path);
-            return -1;
-        }
-        if (tunables_apply_local_addr(path, auspma_prop, state->phy_ip_base[phy])) {
-            printf("pcie: Error applying %s for %s\n", auspma_prop, path);
-            return -1;
+        if (state->pcie_regs->no_phy_ip_tunables) {
+            printf("pcie: skipping phy-ip tunables\n");
+        } else {
+            printf("pcie: dbg: phy-ip tunables @0x%lx\n", state->phy_ip_base[phy]);
+            if (tunables_apply_local_addr(path, pll_prop, state->phy_ip_base[phy])) {
+                printf("pcie: Error applying %s for %s\n", pll_prop, path);
+                return -1;
+            }
+            if (tunables_apply_local_addr(path, auspma_prop, state->phy_ip_base[phy])) {
+                printf("pcie: Error applying %s for %s\n", auspma_prop, path);
+                return -1;
+            }
         }
 
         if (!state->pcie_regs->no_shared_phy &&
