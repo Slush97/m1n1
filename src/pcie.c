@@ -493,6 +493,23 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
+    /*
+     * t8142: the pmgr device table carries virtual "-V" switches for the
+     * apcie domains that are NOT in the node's power-gates list, and the
+     * apcie DARTs' MMIO does not decode with only the 8 listed gates on
+     * (guest reads of dart-apcie0 take sync external aborts while dart-mtp,
+     * same manual-availability, decodes fine). Try turning them on too.
+     */
+    if (state->pcie_regs == &regs_t8142) {
+        static const char *vps[] = {"APCIE-GP-V", "APCIE-SYS-GP-V",
+                                    "APCIE-ST-V", "APCIE-SYS-ST-V"};
+        for (size_t i = 0; i < sizeof(vps) / sizeof(*vps); i++) {
+            printf("pcie: dbg: power on %s\n", vps[i]);
+            if (pmgr_power_on(0, vps[i]))
+                printf("pcie: failed to power on %s\n", vps[i]);
+        }
+    }
+
     printf("pcie: dbg: axi2af apply (reg[%d] = 0x%lx)\n", state->pcie_regs->axi_idx, state->axi_base);
     if (!adt_getprop(adt, adt_offset, "apcie-axi2af-tunables", NULL)) {
         printf("pcie: No axi2af tunables\n");
