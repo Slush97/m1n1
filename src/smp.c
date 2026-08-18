@@ -57,8 +57,11 @@ extern u8 _vectors_start[0];
 int boot_cpu_idx = -1;
 u64 boot_cpu_mpidr = 0;
 
+struct smp_park_dbg smp_park_dbg[MAX_CPUS];
+
 void smp_secondary_entry(void)
 {
+    int my_cpu = target_cpu;
     struct spin_table *me = &spin_table[target_cpu];
 
     if (in_el2())
@@ -79,6 +82,9 @@ void smp_secondary_entry(void)
 
     while (1) {
         while (!(target = me->target)) {
+            smp_park_dbg[my_cpu].beat++;
+            smp_park_dbg[my_cpu].daif = mrs(DAIF);
+            sysop("dmb sy");
             if (wfe_mode) {
                 sysop("wfe");
             } else {
@@ -485,6 +491,7 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
      * breadcrumb so a healed loss is visible evidence, not silence.
      */
     u64 kicks = 0;
+    u64 beat0 = smp_park_dbg[cpu].beat;
     u64 timeout = timeout_calculate(10000);
     while (target->flag == flag) {
         sysop("dmb sy");
@@ -493,6 +500,20 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
             sysop("sev");
             smp_send_ipi(cpu);
             timeout = timeout_calculate(10000);
+            /* ~1s and ~10s in: dump the callee's state from here -- its own
+             * prints never escape a wedge. beat moving = alive but blind
+             * (coherency); beat frozen + crumb = it took an exception; beat
+             * frozen + no crumb = core is gone. */
+            if (kicks == 100 || kicks == 1000) {
+                sysop("dmb sy");
+                printf("smp: cpu%d STUCK after %lu kicks: flag=0x%lx(was 0x%lx) "
+                       "target=0x%lx beat=0x%lx(start 0x%lx) daif=0x%lx "
+                       "exc[n=%lu kind=0x%lx esr=0x%lx elr=0x%lx spsr=0x%lx]\n",
+                       cpu, kicks, target->flag, flag, target->target,
+                       smp_park_dbg[cpu].beat, beat0, smp_park_dbg[cpu].daif,
+                       exc_crumb[cpu].count, exc_crumb[cpu].kind, exc_crumb[cpu].esr,
+                       exc_crumb[cpu].elr, exc_crumb[cpu].spsr);
+            }
         }
     }
     if (kicks)

@@ -34,6 +34,28 @@ u64 smp_get_release_addr(int cpu);
 void smp_set_wfe_mode(bool new_mode);
 void smp_send_ipi(int cpu);
 
+/*
+ * LOCAL ONLY - NOT FOR SUBMISSION: per-cpu breadcrumbs for the t8142 SMP=1
+ * secondary-wedge hunt. The park loop heartbeats into smp_park_dbg; every
+ * exception entry records itself into exc_crumb BEFORE trying to print (a
+ * wedged secondary's own prints never make it out). smp_call4's kick loop
+ * dumps both from the primary when a callee goes unresponsive.
+ */
+struct smp_park_dbg {
+    u64 beat;
+    u64 daif;
+};
+extern struct smp_park_dbg smp_park_dbg[MAX_CPUS];
+
+struct exc_crumb {
+    u64 count;
+    u64 kind;
+    u64 esr;
+    u64 elr;
+    u64 spsr;
+};
+extern struct exc_crumb exc_crumb[MAX_CPUS];
+
 static inline int smp_id(void)
 {
     if (in_el3())

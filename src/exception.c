@@ -7,6 +7,7 @@
 #include "gxf.h"
 #include "iodev.h"
 #include "memory.h"
+#include "smp.h"
 #include "uart.h"
 #include "utils.h"
 
@@ -20,6 +21,23 @@ extern char _el1_vectors_start[0];
 
 volatile enum exc_guard_t exc_guard = GUARD_OFF;
 volatile int exc_count = 0;
+
+
+/* LOCAL ONLY - NOT FOR SUBMISSION: record every exception into a per-cpu
+ * crumb BEFORE any printing, so a wedged secondary's fate is readable from
+ * the primary (see smp_call4's STUCK dump). */
+struct exc_crumb exc_crumb[MAX_CPUS];
+
+static void exc_crumb_record(u64 kind, u64 esr, u64 elr, u64 spsr)
+{
+    struct exc_crumb *c = &exc_crumb[smp_id()];
+    c->count++;
+    c->kind = kind;
+    c->esr = esr;
+    c->elr = elr;
+    c->spsr = spsr;
+    sysop("dmb sy");
+}
 
 void el0_ret(void);
 void el1_ret(void);
@@ -256,6 +274,8 @@ void exc_sync(u64 *regs)
     u64 esr = in_gl ? mrs(SYS_IMP_APL_ESR_GL1) : (el3 ? mrs(ESR_EL3) : mrs(ESR_EL1));
     u64 elr = in_gl ? mrs(SYS_IMP_APL_ELR_GL1) : (el3 ? mrs(ELR_EL3) : mrs(ELR_EL1));
 
+    exc_crumb_record('s', esr, elr, spsr);
+
     u32 elsp = spsr & SPSR_M_EL;
     u32 ec = (esr & ESR_EC) >> ESR_EC_SHIFT;
     u32 iss = esr & ESR_ISS;
@@ -377,6 +397,7 @@ void exc_sync(u64 *regs)
 void exc_irq(u64 *regs)
 {
     u64 spsr = in_gl12() ? mrs(SYS_IMP_APL_SPSR_GL1) : mrs(SPSR_EL1);
+    exc_crumb_record('i', mrs(ESR_EL1), in_gl12() ? mrs(SYS_IMP_APL_ELR_GL1) : mrs(ELR_EL1), spsr);
     u32 reason = aic_ack();
 
     do {
@@ -395,6 +416,7 @@ void exc_irq(u64 *regs)
 void exc_fiq(u64 *regs)
 {
     u64 spsr = in_gl12() ? mrs(SYS_IMP_APL_SPSR_GL1) : mrs(SPSR_EL1);
+    exc_crumb_record('f', mrs(ESR_EL1), in_gl12() ? mrs(SYS_IMP_APL_ELR_GL1) : mrs(ELR_EL1), spsr);
     printf("Exception: FIQ (from %s) cnt: %lx\n", get_exception_source(spsr), mrs(CNTPCT_EL0));
 
     u64 reg = mrs(CNTP_CTL_EL0);
@@ -462,6 +484,7 @@ void exc_fiq(u64 *regs)
 
 void exc_serr(u64 *regs)
 {
+    exc_crumb_record('e', mrs(ESR_EL1), mrs(ELR_EL1), mrs(SPSR_EL1));
     if (!(exc_guard & GUARD_SILENT))
         printf("Exception: SError\n");
 
