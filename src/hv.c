@@ -54,7 +54,7 @@ struct hv_secondary_info_t {
 
 static struct hv_secondary_info_t hv_secondary_info;
 
-void hv_init(void)
+int hv_init(void)
 {
     pcie_shutdown();
     /*
@@ -63,8 +63,10 @@ void hv_init(void)
      * Re-init after the quiesce so the guest sees a live RC; per-port
      * link-up still happens in Linux, which also drives pwren via SMC.
      */
-    if (chip_id == T8142)
-        pcie_init();
+    if (chip_id == T8142 && pcie_init()) {
+        printf("HV: t8142 PCIe initialization failed; refusing guest startup\n");
+        return -1;
+    }
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
     if (display_is_external && display_start_dcp() >= 0)
         display_shutdown(DCP_QUIESCED);
@@ -114,6 +116,8 @@ void hv_init(void)
     sysop("tlbi alle1is");
     sysop("dsb ish");
     sysop("isb");
+
+    return 0;
 }
 
 static void hv_set_gxf_vbar(void)
