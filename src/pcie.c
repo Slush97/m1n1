@@ -742,8 +742,7 @@ static int pcie_init_controller(int controller, const char *path)
 
         printf("pcie: TEST PASS: full Gen4 PHY sequence ready (reg[3]+8 = 0x%x)\n",
                value);
-        printf("pcie: TEST STOP: full-PHY validation complete; ports and Linux not entered\n");
-        return -1;
+        printf("pcie: TEST PHASE 4: unchanged port path through LINKSTS idle check\n");
     }
 
     for (int phy = 0; phy < state->num_phys; phy++) {
@@ -1034,6 +1033,11 @@ static int pcie_init_controller(int controller, const char *path)
             goto next_port;
         }
 
+        if (state->pcie_regs->phy_phy_idx != -1) {
+            printf("pcie: TEST PASS: port %d cleared LINKSTS busy\n", port);
+            goto next_port;
+        }
+
         /* Do it again? */
         if (state->pcie_regs->type == APCIE_T602X && controller == APCIE) {
             clear32(state->port_base[port] + APCIE_T602X_PORT_RESET, APCIE_PORT_RESET_DIS);
@@ -1132,7 +1136,16 @@ static int pcie_init_controller(int controller, const char *path)
         }
 
     next_port:
-        read32(state->port_base[port] + APCIE_PORT_LINKSTS);
+        if (state->pcie_regs->phy_phy_idx != -1)
+            printf("pcie: TEST RESULT: port %d LINKSTS = 0x%x\n", port,
+                   read32(state->port_base[port] + APCIE_PORT_LINKSTS));
+        else
+            read32(state->port_base[port] + APCIE_PORT_LINKSTS);
+    }
+
+    if (state->pcie_regs->phy_phy_idx != -1) {
+        printf("pcie: TEST STOP: port-idle validation complete; DART and Linux not entered\n");
+        return -1;
     }
 
     printf("pcie: Initialized controller %d\n", controller);
