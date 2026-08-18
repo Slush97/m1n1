@@ -15,6 +15,8 @@ parser.add_argument('-m', '--script', type=pathlib.Path, action='append', defaul
 parser.add_argument('-c', '--command', action="append", default=[])
 parser.add_argument('-S', '--shell', action="store_true")
 parser.add_argument('-e', '--hook-exceptions', action="store_true")
+parser.add_argument('--exception-backtrace', action="store_true",
+                    help='Print a guest stack backtrace automatically for unhandled exceptions')
 parser.add_argument('-d', '--debug-xnu', action="store_true")
 parser.add_argument('-l', '--logfile', type=pathlib.Path)
 parser.add_argument('-C', '--cpus', default=None)
@@ -59,6 +61,7 @@ if not args.raw:
 hv = HV(iface, p, u)
 
 hv.hook_exceptions = args.hook_exceptions
+hv.exception_backtrace = args.exception_backtrace
 hv.xnu_bootargs_x1 = args.xnu_bootargs_x1
 
 hv.init()

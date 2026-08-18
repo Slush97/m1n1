@@ -108,6 +108,7 @@ class HV(Reloadable):
         self.wdt_cpu = None
         self.smp = True
         self.hook_exceptions = False
+        self.exception_backtrace = False
         self.started_cpus = {}
         self.started = False
         self.ctx = None
@@ -988,6 +989,12 @@ class HV(Reloadable):
             self.log(f"Guest exception: {reason.name}/{code.name}")
             self.update_pac_mask()
             self.u.print_context(ctx, self.is_fault, sym=self.get_sym)
+            if self.exception_backtrace:
+                try:
+                    self.bt()
+                except Exception:
+                    self.log("Python exception while printing guest backtrace:")
+                    traceback.print_exc()
 
         if self._sigint_pending or not handled or user_interrupt:
             self._sigint_pending = False
