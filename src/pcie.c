@@ -685,8 +685,9 @@ static int pcie_init_controller(int controller, const char *path)
     /*
      * Isolated t8142 decode-gate validation. Exact 25E246
      * AppleT8142PCIe::_initializeGen4Phy performs this reg[3] handshake
-     * before its first PHY-IP access through reg[4]. Stop immediately after
-     * one read so this experimental image can never continue into Linux.
+     * before its first PHY-IP access through reg[4]. This experimental path
+     * continues through only the remaining Apple Gen4 PHY sequence, then
+     * stops before port initialization so it can never continue into Linux.
      */
     if (state->pcie_regs->phy_phy_idx != -1) {
         u32 value;
@@ -714,11 +715,34 @@ static int pcie_init_controller(int controller, const char *path)
         value = read32(state->phy_phy_base + 4);
         write32(state->phy_phy_base + 4, value | BIT(0));
 
-        printf("pcie: TEST PHASE 2: first PHY-IP read @0x%lx\n",
-               state->phy_ip_base[0] + 0x90);
-        value = read32(state->phy_ip_base[0] + 0x90);
-        printf("pcie: TEST PASS: PHY-IP[0x90] = 0x%x\n", value);
-        printf("pcie: TEST STOP: isolated validation complete; Linux not entered\n");
+        printf("pcie: TEST PHASE 2a: PHY-IP PLL tunables @0x%lx\n",
+               state->phy_ip_base[0]);
+        if (tunables_apply_local_addr(path, "apcie-phy-ip-pll-tunables",
+                                      state->phy_ip_base[0])) {
+            printf("pcie: TEST FAIL: PHY-IP PLL tunables\n");
+            return -1;
+        }
+
+        printf("pcie: TEST PHASE 2b: PHY-IP AUSPMA tunables @0x%lx\n",
+               state->phy_ip_base[0]);
+        if (tunables_apply_local_addr(path, "apcie-phy-ip-auspma-tunables",
+                                      state->phy_ip_base[0])) {
+            printf("pcie: TEST FAIL: PHY-IP AUSPMA tunables\n");
+            return -1;
+        }
+
+        printf("pcie: TEST PHASE 3: finish PHY handshake\n");
+        clear32(state->phy_ip_base[0] + 0x90, BIT(16));
+        set32(state->phy_phy_base + 4, BIT(4));
+        if (pcie_poll32_value(state->phy_phy_base + 8, BIT(0), BIT(0), &value,
+                              250000)) {
+            printf("pcie: TEST FAIL: reg[3]+8 bit 0 timeout (last 0x%x)\n", value);
+            return -1;
+        }
+
+        printf("pcie: TEST PASS: full Gen4 PHY sequence ready (reg[3]+8 = 0x%x)\n",
+               value);
+        printf("pcie: TEST STOP: full-PHY validation complete; ports and Linux not entered\n");
         return -1;
     }
 
