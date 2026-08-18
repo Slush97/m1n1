@@ -577,7 +577,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
 
         case P_PCIE_INIT:
-            pcie_init();
+            reply->retval = pcie_init();
             break;
         case P_PCIE_SHUTDOWN:
             pcie_shutdown();

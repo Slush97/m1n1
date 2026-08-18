@@ -2866,7 +2866,10 @@ int kboot_boot(void *kernel)
     clk_init();
 
     usb_init();
-    pcie_init();
+    if (pcie_init() && chip_id == T8142) {
+        printf("kboot: t8142 PCIe initialization failed; refusing to start Linux\n");
+        return -1;
+    }
     /*
      * LOCAL (t8142): dapf_init_all() takes an L2C SError at 0x380714004. That
      * address is /arm-io/dart-aop reg[1], the first dapf_entries[] element, so

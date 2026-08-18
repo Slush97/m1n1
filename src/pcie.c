@@ -424,6 +424,8 @@ static int pcie_t8142_enable_dart_clock_protection(void)
 
     u64 addr = pswr0 + offset;
     u32 mask = BIT(bit);
+    printf("pcie: t8142 APCIE DART clock-protection RMW @0x%lx (mask 0x%x)\n", addr,
+           mask);
     u32 old = read32(addr);
     u32 verify = writeread32(addr, old | mask);
     if (!(verify & mask)) {
