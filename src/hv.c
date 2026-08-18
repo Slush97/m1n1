@@ -99,8 +99,13 @@ void hv_init(void)
     }
 
     // Set deep WFI back to defaults
+    // LOCAL ONLY - NOT FOR SUBMISSION: on t8142 deep WFI loses all core
+    // state (Linux oops: pc=0 lr=0 x0-x29=0 on idle E-cores; boot-time
+    // secondary-0 deaths) -- keep the chickens.c value WFI_MODE(2), i.e.
+    // clock-gate-only WFI, instead of restoring deep-WFI defaults.
     if (cpu_features->apple_sysregs_unlocked)
-        reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+        reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK,
+                 (chip_id == T8142 ? CYC_OVRD_WFI_MODE(2) : CYC_OVRD_WFI_MODE(0)));
 
     sysop("dsb ishst");
     sysop("tlbi alle1is");
@@ -250,8 +255,13 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     }
     HV_SEC_STEP(8);
 
+    // LOCAL ONLY - NOT FOR SUBMISSION: on t8142 deep WFI loses all core
+    // state (Linux oops: pc=0 lr=0 x0-x29=0 on idle E-cores; boot-time
+    // secondary-0 deaths) -- keep the chickens.c value WFI_MODE(2), i.e.
+    // clock-gate-only WFI, instead of restoring deep-WFI defaults.
     if (cpu_features->apple_sysregs_unlocked)
-        reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+        reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK,
+                 (chip_id == T8142 ? CYC_OVRD_WFI_MODE(2) : CYC_OVRD_WFI_MODE(0)));
     HV_SEC_STEP(9);
 
     // For M3 and up, CNTHCTL_EL2 must be written after the counter redirection
