@@ -1035,7 +1035,7 @@ static int pcie_init_controller(int controller, const char *path)
 
         if (state->pcie_regs->phy_phy_idx != -1) {
             printf("pcie: TEST PASS: port %d cleared LINKSTS busy\n", port);
-            goto next_port;
+            printf("pcie: TEST PHASE 5: port %d downstream DBI configuration\n", port);
         }
 
         /* Do it again? */
@@ -1143,10 +1143,8 @@ static int pcie_init_controller(int controller, const char *path)
             read32(state->port_base[port] + APCIE_PORT_LINKSTS);
     }
 
-    if (state->pcie_regs->phy_phy_idx != -1) {
-        printf("pcie: TEST STOP: port-idle validation complete; DART and Linux not entered\n");
-        return -1;
-    }
+    if (state->pcie_regs->phy_phy_idx != -1)
+        printf("pcie: TEST PASS: composed controller path complete; proceeding to DART gate\n");
 
     printf("pcie: Initialized controller %d\n", controller);
     state->initialized = true;
