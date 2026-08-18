@@ -193,11 +193,18 @@ void hv_start(void *entry, u64 regs[4])
 }
 
 /* LOCAL ONLY - NOT FOR SUBMISSION: stamp per-step progress so the primary
- * can name the step a dying secondary reached (t8142 secondary-0 hunt). */
+ * can name the step a dying secondary reached (t8142 secondary-0 hunt).
+ * v20 lesson: the primary-side watcher is NOT always alive to report (the
+ * death sometimes stalls cpu6's barriers instantly), so the secondary also
+ * narrates each step itself, print+flush, synchronously -- whatever step it
+ * last survived is already on the wire when it dies. Noisy and slow (ms per
+ * step) but this is a diagnosis build. */
 #define HV_SEC_STEP(n)                                                                             \
     do {                                                                                           \
         smp_park_dbg[smp_id()].step = (n);                                                         \
         sysop("dmb sy");                                                                           \
+        printf("HV: sec%d step %d\n", smp_id(), (n));                                              \
+        iodev_console_flush();                                                                     \
     } while (0)
 
 static void hv_init_secondary(struct hv_secondary_info_t *info)
