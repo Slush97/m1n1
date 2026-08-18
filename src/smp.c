@@ -88,7 +88,16 @@ void smp_secondary_entry(void)
             smp_park_dbg[my_cpu].daif = mrs(DAIF);
             sysop("dmb sy");
             if (wfe_mode) {
-                sysop("wfe");
+                /* LOCAL ONLY - NOT FOR SUBMISSION: t8142 -- never let the
+                 * parked cluster look idle: when every e-core sits in wfe,
+                 * the cluster idle-gate can fire and wipe resident cores'
+                 * state (the residual pre-pickup boot death: cpu0 found
+                 * dead at handoff with zero steps executed). Busy-poll
+                 * instead; wfe-mode parks only live from hv start until
+                 * the guest claims the cores, so the power cost is a
+                 * minute or two per boot. */
+                if (chip_id != T8142)
+                    sysop("wfe");
             } else {
                 deep_wfi();
 
