@@ -559,6 +559,39 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
         printf("smp: cpu%d was slow but picked up after %lu kick(s)\n", cpu, kicks);
 }
 
+/* LOCAL ONLY - NOT FOR SUBMISSION: post the call and return WITHOUT waiting
+ * for pickup. For the t8142 hv guest-secondary handoff: every wedge variant
+ * traced to the primary stalling on a barrier/spin around the mailbox line
+ * while the (sometimes dying) callee hammers it -- v24 proved even a
+ * busy-polling callee can go silent and take the primary's completion spin
+ * with it. With no completion wait the primary returns to the guest, whose
+ * own 100ms spin-table timeout degrades a no-show to a 9-CPU boot instead
+ * of a wedged machine. Only safe when no further smp_call will target this
+ * cpu until it re-parks (true for guest entry: it never returns). */
+void smp_call4_nowait(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+{
+    if (cpu >= MAX_CPUS)
+        return;
+
+    struct spin_table *target = &spin_table[cpu];
+
+    if (cpu == boot_cpu_idx)
+        return;
+
+    target->args[0] = arg0;
+    target->args[1] = arg1;
+    target->args[2] = arg2;
+    target->args[3] = arg3;
+    sysop("dmb sy");
+    target->target = (u64)func;
+    sysop("dsb sy");
+
+    if (wfe_mode)
+        sysop("sev");
+    else
+        smp_send_ipi(cpu);
+}
+
 u64 smp_wait(int cpu)
 {
     if (cpu >= MAX_CPUS)

@@ -328,20 +328,17 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
     iodev_console_flush();
     smp_park_dbg[cpu].step = 0;
     sysop("dmb sy");
-    smp_call4(cpu, hv_init_and_enter_secondary, (u64)&hv_secondary_info, (u64)entry, (u64)regs,
-              0);
-    if (smp_call_gaveup) {
-        printf("HV: secondary %d never picked up the handoff -- abandoning it\n", cpu);
-        hv_started_cpus[cpu] = false;
-        __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
-        iodev_console_flush();
-        return;
-    }
+    /* Fire-and-forget: no completion spin on the mailbox line (see
+     * smp_call4_nowait). The step watcher below is the only wait, on a
+     * DIFFERENT cache line, bounded, with graceful abandonment. */
+    smp_call4_nowait(cpu, hv_init_and_enter_secondary, (u64)&hv_secondary_info, (u64)entry,
+                     (u64)regs, 0);
 
     /* Watch the callee walk its init steps up to the ERET (step 14); if it
-     * dies mid-init -- the leading theory after v19 -- NAME the step it
-     * reached while the console still works. Iteration-counted (~0.5-5s);
-     * a healthy secondary is at 14 within microseconds. */
+     * never shows or dies mid-init, NAME the step it reached while the
+     * console still works, then abandon it (guest boots without the CPU).
+     * Iteration-counted (~0.5-5s); a healthy secondary is at 14 within
+     * microseconds. */
     u64 spins = 0;
     while (smp_park_dbg[cpu].step < 14) {
         sysop("dmb sy");

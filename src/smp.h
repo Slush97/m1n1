@@ -62,6 +62,8 @@ extern struct exc_crumb exc_crumb[MAX_CPUS];
  * dead instead of waiting on it. */
 extern bool smp_call_gaveup;
 
+void smp_call4_nowait(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
+
 static inline int smp_id(void)
 {
     if (in_el3())
