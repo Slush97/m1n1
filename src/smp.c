@@ -470,8 +470,33 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     else
         smp_send_ipi(cpu);
 
-    while (target->flag == flag)
+    /*
+     * LOCAL ONLY - NOT FOR SUBMISSION: t8142 loses this wake-up, rarely.
+     * Observed as the M1N1_SMP=1 guest hang at "HV: Entering guest secondary
+     * 0": across every recorded hang (3x, two m1n1 builds) the *first*
+     * smp_call4 to a long-parked cpu0 always lands, and the second one --
+     * issued microseconds after the secondary re-parks into wfe, with the
+     * whole e-core cluster otherwise idle -- is intermittently never taken.
+     * The caller then spins here forever with FIQs masked, the hv tick dies,
+     * and the WDT resets the machine. SEV-to-WFE is architecturally lossless,
+     * so treat this as a chip wake-delivery quirk: re-kick (both SEV and a
+     * fast IPI; a pending IPI also wakes WFE, and the hv FIQ path acks
+     * unqueued IPIs harmlessly) until the callee picks up, and leave a
+     * breadcrumb so a healed loss is visible evidence, not silence.
+     */
+    u64 kicks = 0;
+    u64 timeout = timeout_calculate(10000);
+    while (target->flag == flag) {
         sysop("dmb sy");
+        if (timeout_expired(timeout)) {
+            kicks++;
+            sysop("sev");
+            smp_send_ipi(cpu);
+            timeout = timeout_calculate(10000);
+        }
+    }
+    if (kicks)
+        printf("smp: cpu%d lost its wake-up, healed after %lu extra kick(s)\n", cpu, kicks);
 }
 
 u64 smp_wait(int cpu)
