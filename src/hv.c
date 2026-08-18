@@ -263,6 +263,15 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
     mmu_init_secondary(cpu);
     iodev_console_flush();
     smp_call4(cpu, hv_init_secondary, (u64)&hv_secondary_info, 0, 0, 0);
+    /* LOCAL ONLY - NOT FOR SUBMISSION: t8142 wedge containment. If the
+     * parked core never took the call, abandon it: the guest's own
+     * smp_start_cpu times out in 100ms, prints Failed! and boots without
+     * the CPU -- infinitely better than wedging the whole box here. */
+    if (smp_call_gaveup) {
+        printf("HV: secondary %d unresponsive at init -- abandoning it\n", cpu);
+        iodev_console_flush();
+        return;
+    }
     smp_wait(cpu);
     iodev_console_flush();
 
@@ -272,6 +281,12 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 
     iodev_console_flush();
     smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)regs, 0, 0);
+    if (smp_call_gaveup) {
+        printf("HV: secondary %d never entered the guest -- abandoning it\n", cpu);
+        hv_started_cpus[cpu] = false;
+        __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
+        iodev_console_flush();
+    }
 }
 
 void hv_exit_cpu(int cpu)

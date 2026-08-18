@@ -58,6 +58,7 @@ int boot_cpu_idx = -1;
 u64 boot_cpu_mpidr = 0;
 
 struct smp_park_dbg smp_park_dbg[MAX_CPUS];
+bool smp_call_gaveup;
 
 void smp_secondary_entry(void)
 {
@@ -493,6 +494,7 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     u64 kicks = 0;
     u64 beat0 = smp_park_dbg[cpu].beat;
     u64 timeout = timeout_calculate(10000);
+    smp_call_gaveup = false;
     while (target->flag == flag) {
         sysop("dmb sy");
         if (timeout_expired(timeout)) {
@@ -500,11 +502,11 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
             sysop("sev");
             smp_send_ipi(cpu);
             timeout = timeout_calculate(10000);
-            /* ~1s and ~10s in: dump the callee's state from here -- its own
+            /* ~1s and ~1.5s in: dump the callee's state from here -- its own
              * prints never escape a wedge. beat moving = alive but blind
              * (coherency); beat frozen + crumb = it took an exception; beat
              * frozen + no crumb = core is gone. */
-            if (kicks == 100 || kicks == 1000) {
+            if (kicks == 100 || kicks == 150) {
                 sysop("dmb sy");
                 printf("smp: cpu%d STUCK after %lu kicks: flag=0x%lx(was 0x%lx) "
                        "target=0x%lx beat=0x%lx(start 0x%lx) daif=0x%lx "
@@ -513,6 +515,19 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
                        smp_park_dbg[cpu].beat, beat0, smp_park_dbg[cpu].daif,
                        exc_crumb[cpu].count, exc_crumb[cpu].kind, exc_crumb[cpu].esr,
                        exc_crumb[cpu].elr, exc_crumb[cpu].spsr);
+            }
+            /* Give up rather than wedge the machine: spinning here forever
+             * (FIQs masked, in a trap handler) kills the hv tick, the
+             * uartproxy, and eventually the box -- the pre-instrumentation
+             * soak proved the wedge outlives any reasonable wait AND that
+             * the box does not always self-reset. Callers must check
+             * smp_call_gaveup and abandon the CPU. */
+            if (kicks >= 150) {
+                target->target = 0;
+                sysop("dmb sy");
+                smp_call_gaveup = true;
+                printf("smp: cpu%d call ABANDONED after %lu kicks\n", cpu, kicks);
+                return;
             }
         }
     }

@@ -56,6 +56,11 @@ struct exc_crumb {
 };
 extern struct exc_crumb exc_crumb[MAX_CPUS];
 
+/* Set by smp_call4 when the callee never picked the call up and it was
+ * abandoned (see the give-up path); callers must then treat that CPU as
+ * dead instead of waiting on it. */
+extern bool smp_call_gaveup;
+
 static inline int smp_id(void)
 {
     if (in_el3())
