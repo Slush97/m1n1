@@ -103,6 +103,9 @@
 #define PHY_STRIDE   0x4000
 #define PHYIP_STRIDE 0x40000
 
+#define T8142_DART_PS_WR_DIS_ENTRY_SIZE 6
+#define T8142_DART_PS_WR_DIS_SENTINEL   0xff
+
 struct fuse_bits {
     u16 src_reg;
     u16 tgt_reg;
@@ -291,6 +294,7 @@ static const struct reg_info regs_t8142 = {
 };
 
 static bool pcie_initialized = false;
+static bool t8142_dart_clock_protection_enabled = false;
 
 enum PCIE_CONTROLLERS {
     APCIE,
@@ -319,6 +323,119 @@ struct state {
 };
 
 static struct state controllers[NUM_CONTROLLERS];
+
+/*
+ * T8142's manual-availability APCIE DARTs share one SPTM-managed PS_WR_DIS
+ * entry. The ADT supplies the same six-byte record table and per-DART IDs
+ * consumed by sptm_t8110dart_powerup(). Resolve the address from those
+ * properties instead of baking in the J704 physical address.
+ *
+ * Apple takes a global lock and reference-counts this entry across both
+ * DARTs. m1n1 only acquires it once and deliberately holds it until reset,
+ * so a process-local boolean is sufficient here. pcie_shutdown() must not
+ * clear the bit while a subsequently booted kernel can still use the DARTs.
+ */
+static int pcie_t8142_enable_dart_clock_protection(void)
+{
+    if (t8142_dart_clock_protection_enabled)
+        return 0;
+
+    int chosen = adt_path_offset(adt, "/chosen");
+    if (chosen < 0) {
+        printf("pcie: Error getting /chosen for DART clock protection\n");
+        return -1;
+    }
+
+    u32 clock_protection;
+    if (ADT_GETPROP(adt, chosen, "dart-clock-protection", &clock_protection) < 0 ||
+        clock_protection != 1) {
+        printf("pcie: Missing or invalid dart-clock-protection property\n");
+        return -1;
+    }
+
+    u32 entries_len;
+    const u8 *entries = adt_getprop(adt, chosen, "dart-ps-wr-dis-entries", &entries_len);
+    if (!entries || !entries_len || entries_len % T8142_DART_PS_WR_DIS_ENTRY_SIZE) {
+        printf("pcie: Missing or invalid dart-ps-wr-dis-entries property\n");
+        return -1;
+    }
+
+    int dart0_path[8];
+    int dart2_path[8];
+    int dart0 = adt_path_offset_trace(adt, "/arm-io/dart-apcie0", dart0_path);
+    int dart2 = adt_path_offset_trace(adt, "/arm-io/dart-apcie2", dart2_path);
+    if (dart0 < 0 || dart2 < 0) {
+        printf("pcie: Error getting APCIE DART nodes\n");
+        return -1;
+    }
+
+    u32 ids0_len;
+    u32 ids2_len;
+    const u8 *ids0 =
+        adt_getprop(adt, dart0, "clock-protection-wr-dis-id", &ids0_len);
+    const u8 *ids2 =
+        adt_getprop(adt, dart2, "clock-protection-wr-dis-id", &ids2_len);
+    if (!ids0 || !ids2 || ids0_len != 2 || ids2_len != 2 || ids0[0] != ids2[0] ||
+        ids0[1] != T8142_DART_PS_WR_DIS_SENTINEL ||
+        ids2[1] != T8142_DART_PS_WR_DIS_SENTINEL) {
+        printf("pcie: Unexpected APCIE DART clock-protection selectors\n");
+        return -1;
+    }
+
+    u32 state0_len;
+    u32 state2_len;
+    const u8 *state0 =
+        adt_getprop(adt, dart0, "clock-protection-dart-state", &state0_len);
+    const u8 *state2 =
+        adt_getprop(adt, dart2, "clock-protection-dart-state", &state2_len);
+    if (!state0 || !state2 || state0_len != 1 || state2_len != 1 || state0[0] || state2[0]) {
+        printf("pcie: Unexpected APCIE DART clock-protection state\n");
+        return -1;
+    }
+
+    u8 id = ids0[0];
+    if (id == T8142_DART_PS_WR_DIS_SENTINEL ||
+        (u32)(id + 1) * T8142_DART_PS_WR_DIS_ENTRY_SIZE > entries_len) {
+        printf("pcie: APCIE DART clock-protection selector is out of range\n");
+        return -1;
+    }
+
+    const u8 *entry = &entries[id * T8142_DART_PS_WR_DIS_ENTRY_SIZE];
+    u16 offset = entry[0] | ((u16)entry[1] << 8);
+    u8 instance = entry[2];
+    u8 bit = entry[3];
+    if (bit >= 32) {
+        printf("pcie: Invalid APCIE DART clock-protection bit %u\n", bit);
+        return -1;
+    }
+
+    u64 pswr0;
+    u64 pswr2;
+    u64 pswr0_size;
+    u64 pswr2_size;
+    int reg_index = 1 + instance; /* reg[0] is the DART; PSWR instances follow. */
+    if (adt_get_reg(adt, dart0_path, "reg", reg_index, &pswr0, &pswr0_size) ||
+        adt_get_reg(adt, dart2_path, "reg", reg_index, &pswr2, &pswr2_size) ||
+        pswr0 != pswr2 || pswr0_size != pswr2_size || pswr0_size < sizeof(u32) ||
+        offset > pswr0_size - sizeof(u32)) {
+        printf("pcie: Invalid or unshared APCIE DART PS_WR_DIS register\n");
+        return -1;
+    }
+
+    u64 addr = pswr0 + offset;
+    u32 mask = BIT(bit);
+    u32 old = read32(addr);
+    u32 verify = writeread32(addr, old | mask);
+    if (!(verify & mask)) {
+        printf("pcie: APCIE DART clock-protection write did not latch\n");
+        return -1;
+    }
+
+    t8142_dart_clock_protection_enabled = true;
+    printf("pcie: Enabled t8142 APCIE DART clock protection @0x%lx (mask 0x%x)\n", addr,
+           mask);
+    return 0;
+}
 
 static int pcie_init_controller(int controller, const char *path)
 {
@@ -940,6 +1057,9 @@ int pcie_init(void)
     success |= pcie_init_controller(APCIE, "/arm-io/apcie0") == 0;
     success |= pcie_init_controller(APCIE_GE0, "/arm-io/apcie-ge0") == 0;
     success |= pcie_init_controller(APCIE_GE1, "/arm-io/apcie-ge1") == 0;
+
+    if (success && chip_id == T8142 && pcie_t8142_enable_dart_clock_protection())
+        return -1;
 
     if (success)
         pcie_initialized = true;
