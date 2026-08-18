@@ -154,6 +154,7 @@ struct reg_info {
     int rc_idx;
     int phy_common_idx;
     int phy_idx;
+    int phy_phy_idx;
     u32 phy_ctrl_reset;
     int phy_ip_idx;
     int axi_idx;
@@ -176,6 +177,7 @@ static const struct reg_info regs_t8xxx_t600x = {
     .rc_idx = 1,
     .phy_common_idx = -1,
     .phy_idx = 2,
+    .phy_phy_idx = -1,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 4,
@@ -191,6 +193,7 @@ static const struct reg_info regs_t602x = {
     // 2 = phy unknown?
     .phy_common_idx = 3,
     .phy_idx = 4,
+    .phy_phy_idx = -1,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 5,
     .axi_idx = 6,
@@ -205,6 +208,7 @@ static const struct reg_info regs_t8122 = {
     .rc_idx = 1,
     .phy_common_idx = 2,
     .phy_idx = 2,
+    .phy_phy_idx = -1,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 4,
@@ -221,6 +225,7 @@ static const struct reg_info regs_t8132 = {
     .rc_idx = 1,
     .phy_common_idx = 2,
     .phy_idx = 2,
+    .phy_phy_idx = -1,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8132,
     .phy_ip_idx = 3,
     .axi_idx = 4,
@@ -237,6 +242,7 @@ static const struct reg_info regs_t6031 = {
     .rc_idx = 1,
     .phy_common_idx = 2,
     .phy_idx = 2,
+    .phy_phy_idx = -1,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 4,
@@ -248,8 +254,7 @@ static const struct reg_info regs_t6031 = {
  * t8142 (M5) shared regs:
  *   [0] config/ECAM, [1] rc, [2] PHY block 0x27f000000/0x40000
  *   (+0x4000 common, +0x8000 phy0, +0x10000.. per-port phys),
- *   [3] phy-ip (pll/auspma tunable offsets extend past its declared 0x4000
- *   size but stay inside the [2] 0x40000 window), [4] second phy-ip-like
+ *   [3] phy-phy control/handshake, [4] phy-ip
  *   window 0x27f040000/0x20000, [5] axi2af 0x27e000000/0x1000000,
  *   [6]/[7] unknown. axi_idx is 5, not t6031's 4: the axi2af tunables
  *   reach offset 0x20058, which does not fit [4]'s 0x20000.
@@ -262,13 +267,13 @@ static const struct reg_info regs_t8142 = {
     .rc_idx = 1,
     .phy_common_idx = 2,
     .phy_idx = 2,
+    .phy_phy_idx = 3,
     .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     /*
-     * phy_ip is reg[4] (0x27f040000/0x20000), NOT reg[3]: the v2 run
-     * faulted at reg[3]+0x501c -- the first pll tunable offset past
-     * reg[3]'s declared 0x4000 size (the five entries below 0x4000 all
-     * landed). ADT reg sizes are real on t8142. Both tunable sets fit
-     * reg[4] exactly (pll max 0x62e8, auspma max 0x1e404 < 0x20000).
+     * Exact 25E246 AppleT8142PCIe maps the three PHY slots as reg[2],
+     * reg[3], and reg[4]. _readPhyPhyReg uses reg[3], while
+     * _readPhyIPReg uses reg[4]. Both PHY-IP tunable sets fit reg[4]
+     * exactly (pll max 0x62e8, auspma max 0x1e404 < 0x20000).
      */
     .phy_ip_idx = 4,
     .axi_idx = 5,
@@ -296,6 +301,18 @@ static const struct reg_info regs_t8142 = {
 static bool pcie_initialized = false;
 static bool t8142_dart_clock_protection_enabled = false;
 
+static int pcie_poll32_value(u64 addr, u32 mask, u32 target, u32 *value, u32 timeout)
+{
+    while (--timeout > 0) {
+        *value = read32(addr);
+        if ((*value & mask) == target)
+            return 0;
+        udelay(1);
+    }
+
+    return -1;
+}
+
 enum PCIE_CONTROLLERS {
     APCIE,
     APCIE_GE0,
@@ -311,6 +328,7 @@ struct state {
     u64 axi_base;
     u64 phy_common_base;
     u64 phy_base[MAX_PHYS];
+    u64 phy_phy_base;
     u64 phy_ip_base[MAX_PHYS];
     u64 fuse_base;
     u32 port_count;
@@ -565,6 +583,17 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
+    if (state->pcie_regs->phy_phy_idx != -1) {
+        if (adt_get_reg(adt, adt_path, "reg", state->pcie_regs->phy_phy_idx,
+                        &state->phy_phy_base, NULL)) {
+            printf("pcie: Error getting reg with index %d for %s\n",
+                   state->pcie_regs->phy_phy_idx, path);
+            return -1;
+        }
+    } else {
+        state->phy_phy_base = 0;
+    }
+
     if (adt_get_reg(adt, adt_path, "reg", state->pcie_regs->phy_ip_idx, &state->phy_ip_base[0],
                     NULL)) {
         printf("pcie: Error getting reg with index %d for %s\n", state->pcie_regs->phy_ip_idx,
@@ -651,6 +680,46 @@ static int pcie_init_controller(int controller, const char *path)
             printf("pcie: Reference clock not available\n");
             return -1;
         }
+    }
+
+    /*
+     * Isolated t8142 decode-gate validation. Exact 25E246
+     * AppleT8142PCIe::_initializeGen4Phy performs this reg[3] handshake
+     * before its first PHY-IP access through reg[4]. Stop immediately after
+     * one read so this experimental image can never continue into Linux.
+     */
+    if (state->pcie_regs->phy_phy_idx != -1) {
+        u32 value;
+
+        printf("pcie: TEST PHASE 1: PHY handshake reg[%d] @0x%lx\n",
+               state->pcie_regs->phy_phy_idx, state->phy_phy_base);
+        value = read32(state->phy_phy_base);
+        write32(state->phy_phy_base, value | BIT(0));
+        printf("pcie: TEST PHASE 1a: wait reg[3]+0 bit 2\n");
+        if (pcie_poll32_value(state->phy_phy_base, BIT(2), BIT(2), &value, 250000)) {
+            printf("pcie: TEST FAIL: reg[3]+0 bit 2 timeout (last 0x%x)\n", value);
+            return -1;
+        }
+
+        udelay(1);
+        write32(state->phy_phy_base, value | BIT(1));
+        printf("pcie: TEST PHASE 1b: wait reg[3]+0 bit 3\n");
+        if (pcie_poll32_value(state->phy_phy_base, BIT(3), BIT(3), &value, 250000)) {
+            printf("pcie: TEST FAIL: reg[3]+0 bit 3 timeout (last 0x%x)\n", value);
+            return -1;
+        }
+
+        write32(state->phy_phy_base, value & ~BIT(4));
+        udelay(1);
+        value = read32(state->phy_phy_base + 4);
+        write32(state->phy_phy_base + 4, value | BIT(0));
+
+        printf("pcie: TEST PHASE 2: first PHY-IP read @0x%lx\n",
+               state->phy_ip_base[0] + 0x90);
+        value = read32(state->phy_ip_base[0] + 0x90);
+        printf("pcie: TEST PASS: PHY-IP[0x90] = 0x%x\n", value);
+        printf("pcie: TEST STOP: isolated validation complete; Linux not entered\n");
+        return -1;
     }
 
     for (int phy = 0; phy < state->num_phys; phy++) {
