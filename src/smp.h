@@ -44,6 +44,7 @@ void smp_send_ipi(int cpu);
 struct smp_park_dbg {
     u64 beat;
     u64 daif;
+    u64 step;
 };
 extern struct smp_park_dbg smp_park_dbg[MAX_CPUS];
 

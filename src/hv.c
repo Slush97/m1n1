@@ -192,10 +192,20 @@ void hv_start(void *entry, u64 regs[4])
     spin_unlock(&bhl);
 }
 
+/* LOCAL ONLY - NOT FOR SUBMISSION: stamp per-step progress so the primary
+ * can name the step a dying secondary reached (t8142 secondary-0 hunt). */
+#define HV_SEC_STEP(n)                                                                             \
+    do {                                                                                           \
+        smp_park_dbg[smp_id()].step = (n);                                                         \
+        sysop("dmb sy");                                                                           \
+    } while (0)
+
 static void hv_init_secondary(struct hv_secondary_info_t *info)
 {
+    HV_SEC_STEP(2);
     if (cpu_features->apple_sysregs_unlocked)
         gxf_init();
+    HV_SEC_STEP(3);
 
     msr(VBAR_EL1, _hv_vectors_start);
 
@@ -205,6 +215,7 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     msr(VTTBR_EL2, info->vttbr);
     msr(MDCR_EL2, info->mdcr);
     msr(MDSCR_EL1, info->mdscr);
+    HV_SEC_STEP(4);
 
     if (cpu_features->apple_sysregs_unlocked) {
         msr(SYS_IMP_APL_AMX_CTL_EL2, info->amx_ctl);
@@ -212,37 +223,46 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
         msr(SYS_IMP_APL_APVMKEYHI_EL2, info->apvmkeyhi);
         msr(SYS_IMP_APL_APSTS_EL12, info->apsts);
     }
+    HV_SEC_STEP(5);
     msr(ACTLR_EL2, info->actlr_el2);
     if (cpu_features->actlr_el2)
         msr(SYS_ACTLR_EL12, info->actlr_el1);
     else
         msr(SYS_IMP_APL_ACTLR_EL12, info->actlr_el1);
+    HV_SEC_STEP(6);
     if (cpu_features->apple_sysregs_unlocked) {
         msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
         /* GXF_CONFIG is UNDEF unless SPRR is enabled */
         if (info->sprr_config & SPRR_CONFIG_EN)
             msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
     }
+    HV_SEC_STEP(7);
     if (cpu_features->counter_redirect) {
         msr(SYS_IMP_APL_AGTCNTRDIR_EL1, info->agt_cnt_rdir_el1);
         msr(SYS_IMP_APL_AGTCNTRDIR_EL12, info->agt_cnt_rdir_el12);
     }
+    HV_SEC_STEP(8);
 
     if (cpu_features->apple_sysregs_unlocked)
         reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+    HV_SEC_STEP(9);
 
     // For M3 and up, CNTHCTL_EL2 must be written after the counter redirection
     sysop("isb");
     msr(CNTHCTL_EL2, info->cnthctl);
+    HV_SEC_STEP(10);
 
     if (gxf_enabled())
         gl2_call(hv_set_gxf_vbar, 0, 0, 0, 0);
+    HV_SEC_STEP(11);
 
     hv_arm_tick(true);
+    HV_SEC_STEP(12);
 }
 
 static void hv_enter_secondary(void *entry, u64 regs[4])
 {
+    HV_SEC_STEP(14);
     hv_enter_guest(regs[0], regs[1], regs[2], regs[3], entry);
 
     spin_lock(&bhl);
@@ -257,7 +277,9 @@ static void hv_enter_secondary(void *entry, u64 regs[4])
 
 static void hv_init_and_enter_secondary(struct hv_secondary_info_t *info, void *entry, u64 *regs)
 {
+    HV_SEC_STEP(1);
     hv_init_secondary(info);
+    HV_SEC_STEP(13);
     hv_enter_secondary(entry, regs);
 }
 
@@ -287,6 +309,8 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
     __atomic_or_fetch(&hv_cpus_in_guest, BIT(cpu), __ATOMIC_ACQUIRE);
 
     iodev_console_flush();
+    smp_park_dbg[cpu].step = 0;
+    sysop("dmb sy");
     smp_call4(cpu, hv_init_and_enter_secondary, (u64)&hv_secondary_info, (u64)entry, (u64)regs,
               0);
     if (smp_call_gaveup) {
@@ -294,6 +318,28 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
         hv_started_cpus[cpu] = false;
         __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
         iodev_console_flush();
+        return;
+    }
+
+    /* Watch the callee walk its init steps up to the ERET (step 14); if it
+     * dies mid-init -- the leading theory after v19 -- NAME the step it
+     * reached while the console still works. Iteration-counted (~0.5-5s);
+     * a healthy secondary is at 14 within microseconds. */
+    u64 spins = 0;
+    while (smp_park_dbg[cpu].step < 14) {
+        sysop("dmb sy");
+        if (++spins > 50000000) {
+            printf("HV: secondary %d DIED during init/entry at step %lu "
+                   "(beat=0x%lx daif=0x%lx exc[n=%lu kind=0x%lx esr=0x%lx elr=0x%lx "
+                   "spsr=0x%lx]) -- abandoning it\n",
+                   cpu, smp_park_dbg[cpu].step, smp_park_dbg[cpu].beat, smp_park_dbg[cpu].daif,
+                   exc_crumb[cpu].count, exc_crumb[cpu].kind, exc_crumb[cpu].esr,
+                   exc_crumb[cpu].elr, exc_crumb[cpu].spsr);
+            iodev_console_flush();
+            hv_started_cpus[cpu] = false;
+            __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
+            return;
+        }
     }
 }
 
