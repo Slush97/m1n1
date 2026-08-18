@@ -255,6 +255,12 @@ static void hv_enter_secondary(void *entry, u64 regs[4])
     spin_unlock(&bhl);
 }
 
+static void hv_init_and_enter_secondary(struct hv_secondary_info_t *info, void *entry, u64 *regs)
+{
+    hv_init_secondary(info);
+    hv_enter_secondary(entry, regs);
+}
+
 void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 {
     printf("HV: Initializing secondary %d\n", cpu);
@@ -262,27 +268,29 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 
     mmu_init_secondary(cpu);
     iodev_console_flush();
-    smp_call4(cpu, hv_init_secondary, (u64)&hv_secondary_info, 0, 0, 0);
-    /* LOCAL ONLY - NOT FOR SUBMISSION: t8142 wedge containment. If the
-     * parked core never took the call, abandon it: the guest's own
-     * smp_start_cpu times out in 100ms, prints Failed! and boots without
-     * the CPU -- infinitely better than wedging the whole box here. */
-    if (smp_call_gaveup) {
-        printf("HV: secondary %d unresponsive at init -- abandoning it\n", cpu);
-        iodev_console_flush();
-        return;
-    }
-    smp_wait(cpu);
-    iodev_console_flush();
 
+    /*
+     * LOCAL ONLY - NOT FOR SUBMISSION: t8142 secondary-0 wedge fix.
+     * Upstream makes TWO smp calls here (hv_init_secondary; smp_wait; then
+     * hv_enter_secondary), so the callee re-parks for a few us between
+     * them. On t8142 that micro-re-park is lethal, intermittently and only
+     * for the first guest secondary (cpu0, whole e-cluster idle): the core
+     * completes init, re-parks, and dies in a way that also stalls the
+     * primary's next barrier -- wedging the entire machine (kick loops,
+     * dumps and clock- and iteration-based give-ups all proved unreachable
+     * or silenced; the box does not reliably self-reset). The settled-park
+     * FIRST pickup has never failed across hundreds of attempts, so hand
+     * over init+enter as ONE call and never re-park in between.
+     */
     printf("HV: Entering guest secondary %d at %p\n", cpu, entry);
     hv_started_cpus[cpu] = true;
     __atomic_or_fetch(&hv_cpus_in_guest, BIT(cpu), __ATOMIC_ACQUIRE);
 
     iodev_console_flush();
-    smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)regs, 0, 0);
+    smp_call4(cpu, hv_init_and_enter_secondary, (u64)&hv_secondary_info, (u64)entry, (u64)regs,
+              0);
     if (smp_call_gaveup) {
-        printf("HV: secondary %d never entered the guest -- abandoning it\n", cpu);
+        printf("HV: secondary %d never picked up the handoff -- abandoning it\n", cpu);
         hv_started_cpus[cpu] = false;
         __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
         iodev_console_flush();
