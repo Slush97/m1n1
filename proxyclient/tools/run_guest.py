@@ -23,6 +23,8 @@ parser.add_argument('--strip-node', action="append", default=[], metavar='SUBSTR
 parser.add_argument('-r', '--raw', action="store_true")
 parser.add_argument('--no-compress', action="store_true",
                     help='Upload the payload directly instead of using target-side gzdec')
+parser.add_argument('--xnu-bootargs-x1', action="store_true",
+                    help='Start XNU with x0=0 and the boot-args pointer in x1')
 parser.add_argument('-E', '--entry-point', action="store", type=int, help="Entry point for the raw image", default=0x800)
 parser.add_argument('-a', '--append-payload', type=pathlib.Path, action="append", default=[])
 parser.add_argument('-v', '--volume', type=volumespec, action='append',
@@ -57,6 +59,7 @@ if not args.raw:
 hv = HV(iface, p, u)
 
 hv.hook_exceptions = args.hook_exceptions
+hv.xnu_bootargs_x1 = args.xnu_bootargs_x1
 
 hv.init()
 

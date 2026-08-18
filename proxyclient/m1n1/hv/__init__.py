@@ -103,6 +103,7 @@ class HV(Reloadable):
         self.tracer_caches = {}
         self.shell_locals = {}
         self.xnu_mode = False
+        self.xnu_bootargs_x1 = False
         self._update_shell_locals()
         self.wdt_cpu = None
         self.smp = True
@@ -2017,6 +2018,11 @@ class HV(Reloadable):
                 break
         self.started_cpus[cpu_node.cpu_id] = (getattr(cpu_node, "die_id", 0), cpu_node.cluster_id, cpu_node.cpu_id)
         self.sysreg[cpu_node.cpu_id] = {}
-        self.p.hv_start(self.entry, self.guest_base + self.bootargs_off)
+        bootargs = self.guest_base + self.bootargs_off
+        if self.xnu_bootargs_x1:
+            print("Starting primary with x0=0 and boot args in x1")
+            self.p.hv_start(self.entry, 0, bootargs)
+        else:
+            self.p.hv_start(self.entry, bootargs)
 
 from .. import trace
