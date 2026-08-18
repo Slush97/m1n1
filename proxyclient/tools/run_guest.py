@@ -21,6 +21,8 @@ parser.add_argument('-C', '--cpus', default=None)
 parser.add_argument('--strip-node', action="append", default=[], metavar='SUBSTR',
                     help='Remove every ADT node whose name contains SUBSTR.')
 parser.add_argument('-r', '--raw', action="store_true")
+parser.add_argument('--no-compress', action="store_true",
+                    help='Upload the payload directly instead of using target-side gzdec')
 parser.add_argument('-E', '--entry-point', action="store", type=int, help="Entry point for the raw image", default=0x800)
 parser.add_argument('-a', '--append-payload', type=pathlib.Path, action="append", default=[])
 parser.add_argument('-v', '--volume', type=volumespec, action='append',
@@ -111,9 +113,9 @@ if args.append_payload:
     payload = concat
 
 if args.raw:
-    hv.load_raw(payload.read(), args.entry_point)
+    hv.load_raw(payload.read(), args.entry_point, compressed=not args.no_compress)
 else:
-    hv.load_macho(payload, symfile=symfile)
+    hv.load_macho(payload, symfile=symfile, compressed=not args.no_compress)
 
 PMU(u).reset_panic_counter()
 

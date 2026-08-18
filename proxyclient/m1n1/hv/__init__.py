@@ -1695,7 +1695,8 @@ class HV(Reloadable):
         self.p.hv_set_time_stealing(False)
 
 
-    def load_raw(self, image, entryoffset=0x800, use_xnu_symbols=False, vmin=0):
+    def load_raw(self, image, entryoffset=0x800, use_xnu_symbols=False, vmin=0,
+                 compressed=True):
         sepfw_start, sepfw_length = self.u.adt["chosen"]["memory-map"].SEPFW
         tc_start, tc_size = self.u.adt["chosen"]["memory-map"].TrustCache
         if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
@@ -1737,7 +1738,10 @@ class HV(Reloadable):
         self.unmap_carveouts()
 
         print(f"Loading kernel image (0x{len(image):x} bytes)...")
-        self.u.compressed_writemem(guest_base, image, True)
+        if compressed:
+            self.u.compressed_writemem(guest_base, image, True)
+        else:
+            self.iface.writemem(guest_base, image, True)
         self.p.dc_cvau(guest_base, len(image))
         self.p.ic_ivau(guest_base, len(image))
 
@@ -1812,7 +1816,7 @@ class HV(Reloadable):
         self.symbols = [(v, k) for k, v in self.macho.symbols.items()]
         self.symbols.sort()
 
-    def load_macho(self, data, symfile=None):
+    def load_macho(self, data, symfile=None, compressed=True):
         if isinstance(data, str):
             data = open(data, "rb")
 
@@ -1907,7 +1911,9 @@ class HV(Reloadable):
             image = macho.prepare_image(load_hook_m3)
         else:
             image = macho.prepare_image()
-        self.load_raw(image, entryoffset=(macho.entry - macho.vmin), use_xnu_symbols=self.xnu_mode and symfile is not None, vmin=macho.vmin)
+        self.load_raw(image, entryoffset=(macho.entry - macho.vmin),
+                      use_xnu_symbols=self.xnu_mode and symfile is not None,
+                      vmin=macho.vmin, compressed=compressed)
 
     def update_pac_mask(self):
         tcr = TCR(self.u.mrs(TCR_EL12))
