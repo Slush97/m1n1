@@ -420,13 +420,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             } else {
                 if (regs[rt] & (CYC_OVRD_DISABLE_WFI_RET | CYC_OVRD_FIQ_MODE_MASK))
                     return false;
-                /* LOCAL ONLY - NOT FOR SUBMISSION: t8142 deep WFI wipes core
-                 * state; never let a guest ask for it. */
-                if (chip_id == T8142)
-                    msr(SYS_IMP_APL_CYC_OVRD,
-                        (regs[rt] & ~CYC_OVRD_WFI_MODE_MASK) | CYC_OVRD_WFI_MODE(2));
-                else
-                    msr(SYS_IMP_APL_CYC_OVRD, regs[rt]);
+                msr(SYS_IMP_APL_CYC_OVRD, regs[rt]);
             }
             return true;
             /* clang-format off */

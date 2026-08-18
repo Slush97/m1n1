@@ -228,10 +228,7 @@ void deep_wfi(void)
     u64 cyc_ovrd;
     const bool apple_sysregs_unlocked = cpu_features->apple_sysregs_unlocked;
 
-    if (!supports_arch_retention() || chip_id == T8142) {
-        /* LOCAL ONLY - NOT FOR SUBMISSION: t8142 also loses state across
-         * deep WFI in practice (zeroed-register pc=0 oopses on idle
-         * E-cores; SPTM-era power mgmt?) -- treat like the A7-A11 case. */
+    if (!supports_arch_retention()) {
         // A7 - A11 does not support state retention across deep WFI
         // i.e. CPU always ends up at rvbar after deep WFI
         sysop("wfi");
