@@ -3,6 +3,7 @@
 #include "smp.h"
 #include "adt.h"
 #include "aic.h"
+#include "iodev.h"
 #include "aic_regs.h"
 #include "cpu_regs.h"
 #include "malloc.h"
@@ -491,48 +492,62 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
      * unqueued IPIs harmlessly) until the callee picks up, and leave a
      * breadcrumb so a healed loss is visible evidence, not silence.
      */
+    /*
+     * The wait/kick/give-up machinery is ITERATION-counted, not clock-based:
+     * v17 used timeout_calculate/timeout_expired (CNTPCT_EL0) here and its
+     * kick loop provably never fired in the hv CPUSTART trap context (hang
+     * with zero dumps at 85s) -- nothing else in the hv path uses the
+     * CNTPCT helpers, and hv_rendezvous deliberately iteration-counts.
+     * Each spin does a dmb sy (~tens of ns), so 1M spins ~ tens of ms.
+     * The dump records two CNTPCT samples so the next hang also tells us
+     * whether the clock advances in this context.
+     */
+    u64 it = 0;
     u64 kicks = 0;
     u64 beat0 = smp_park_dbg[cpu].beat;
-    u64 timeout = timeout_calculate(10000);
+    u64 cnt0 = mrs(CNTPCT_EL0);
     smp_call_gaveup = false;
     while (target->flag == flag) {
         sysop("dmb sy");
-        if (timeout_expired(timeout)) {
+        if (!(++it % 1000000)) {
             kicks++;
             sysop("sev");
             smp_send_ipi(cpu);
-            timeout = timeout_calculate(10000);
-            /* ~1s and ~1.5s in: dump the callee's state from here -- its own
-             * prints never escape a wedge. beat moving = alive but blind
-             * (coherency); beat frozen + crumb = it took an exception; beat
-             * frozen + no crumb = core is gone. */
-            if (kicks == 100 || kicks == 150) {
+            if (kicks == 1) {
+                printf("smp: cpu%d slow to pick up a call, kicking\n", cpu);
+                iodev_console_flush();
+            }
+            /* beat moving = alive but blind (coherency); beat frozen +
+             * crumb = it took an exception; beat frozen + no crumb = the
+             * core is gone. */
+            if (kicks == 20 || kicks == 60) {
                 sysop("dmb sy");
                 printf("smp: cpu%d STUCK after %lu kicks: flag=0x%lx(was 0x%lx) "
                        "target=0x%lx beat=0x%lx(start 0x%lx) daif=0x%lx "
-                       "exc[n=%lu kind=0x%lx esr=0x%lx elr=0x%lx spsr=0x%lx]\n",
+                       "exc[n=%lu kind=0x%lx esr=0x%lx elr=0x%lx spsr=0x%lx] "
+                       "cnt=0x%lx(start 0x%lx)\n",
                        cpu, kicks, target->flag, flag, target->target,
                        smp_park_dbg[cpu].beat, beat0, smp_park_dbg[cpu].daif,
                        exc_crumb[cpu].count, exc_crumb[cpu].kind, exc_crumb[cpu].esr,
-                       exc_crumb[cpu].elr, exc_crumb[cpu].spsr);
+                       exc_crumb[cpu].elr, exc_crumb[cpu].spsr, mrs(CNTPCT_EL0), cnt0);
+                iodev_console_flush();
             }
             /* Give up rather than wedge the machine: spinning here forever
              * (FIQs masked, in a trap handler) kills the hv tick, the
-             * uartproxy, and eventually the box -- the pre-instrumentation
-             * soak proved the wedge outlives any reasonable wait AND that
-             * the box does not always self-reset. Callers must check
-             * smp_call_gaveup and abandon the CPU. */
-            if (kicks >= 150) {
+             * uartproxy, and the box -- and this wedge does not reliably
+             * self-reset. Callers must check smp_call_gaveup. */
+            if (kicks >= 60) {
                 target->target = 0;
                 sysop("dmb sy");
                 smp_call_gaveup = true;
                 printf("smp: cpu%d call ABANDONED after %lu kicks\n", cpu, kicks);
+                iodev_console_flush();
                 return;
             }
         }
     }
     if (kicks)
-        printf("smp: cpu%d lost its wake-up, healed after %lu extra kick(s)\n", cpu, kicks);
+        printf("smp: cpu%d was slow but picked up after %lu kick(s)\n", cpu, kicks);
 }
 
 u64 smp_wait(int cpu)
